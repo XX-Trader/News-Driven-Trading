@@ -243,7 +243,7 @@ def run_once(username: str = TARGET_USER, count: int = TWEET_LIMIT):
     except Exception as e:
         print("[ERR ] 写入本地原始JSON失败:", e)
         # 即便写失败，也继续尝试解析内存数据
-    test_all(latest_path)
+    # test_all(latest_path)
 
 
     
