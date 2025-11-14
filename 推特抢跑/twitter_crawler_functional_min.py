@@ -57,7 +57,7 @@ MEDIA_DIR = os.path.join(os.path.dirname(__file__), "twitter_media")  # 媒体�
 # Poe(OpenAI兼容)配置（如需使用 AI 分析）
 AI_API_KEY = "bvJrIZp3bug_ZHHvkBTQmN_HanLRg-J6yEpRwAocESw"  # 示例 Key（建议改为环境变量）
 AI_BASE_URL = "https://api.poe.com/v1"
-AI_MODEL = "gpt-5"
+AI_MODEL = "gpt-5.1"
 
 # OpenAI 代理开关与配置（按需启用）
 USE_OPENAI_PROXY = True  # 开关：True 使用下方代理，False 直连
@@ -168,7 +168,7 @@ Twitter 推文内容（通过API获取）：{text}
 
 【第1步：关键信息提取】
 - 提取关键信息：
-  - 涉及的项目或币种名称/代号（如 BTC、ETH、SOL、Astar → ASTR 等）
+  - 涉及的项目或币种名称/代号（如 BTC、ETH、SOL、 ADA 等）
   - 是否出现以下关键词或对应含义：上架交易所（listing）、合作（partnership）、融资（funding）、空投（airdrop）、主网/升级（mainnet/upgrade）、黑客攻击（hack）、监管打击（ban）、大额买入/卖出（bought/sold/ape in/dumped）
   - 明确的行为：买入、卖出、加仓、清仓、做多、做空、看好、唱空等
   - 是否提到时间（today/now/soon）和平台（Binance、OKX、Coinbase 等）
@@ -286,10 +286,12 @@ Twitter 推文内容（通过API获取）：{text}
   - 影响力很低/存疑，或内容明显像是玩笑/娱乐
   - 币种流动性极差，稍微进出就会大幅波动
   - 同时存在明显潜在风险（如刚发生黑客攻击、项目被广泛质疑），多重矛盾信息难以下结论
+  - 文章说什么币，你就输出什么币种，不要自己改变币种
 
 请严格按照上述逻辑进行分析和输出。
     """
     promot = promot.replace('{text}', text)
+    print(promot)
     try:
         import openai  # 延迟导入
         # 代理支持：优先使用 httpx 客户端方式；失败则回退到环境变量
@@ -366,7 +368,10 @@ def run_once(username: str = TARGET_USER, count: int = TWEET_LIMIT):
     #     print("[ERR ] 写入本地原始JSON失败:", e)
     #     # 即便写失败，也继续尝试解析内存数据
 
-    test_all(latest_path)
+    # test_all(latest_path)
+    good_path1 = os.path.join(os.path.dirname(__file__), "twitter_media", "1984992347395141987.json")
+
+    test_all(good_path1)
 
 
 # -----------------------
