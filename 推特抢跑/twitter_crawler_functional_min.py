@@ -76,20 +76,6 @@ def ensure_media_dir(path: str = MEDIA_DIR) -> str:
     return p
 
 
-def download_file(url: str, local_path: str, timeout: int = 30) -> bool:
-    """下载单个媒体文件到 local_path，失败返回 False。"""
-    try:
-        r = requests.get(url, timeout=timeout, stream=True)
-        r.raise_for_status()
-        with open(local_path, "wb") as f:
-            for c in r.iter_content(8192):
-                if c:
-                    f.write(c)
-        return True
-    except Exception as e:
-        print("[WARN] 媒体下载失败:", e)
-        return False
-
 
 def load_local_json_strict(path: str, page=1) -> List[Dict]:
     """读取 latest.json，并直接返回其中 ['tweets'][0]，以单元素列表[List[Dict]]返回。"""
@@ -127,36 +113,6 @@ def fetch_last_tweets(username: str, count: int = TWEET_LIMIT) -> List[Dict]:
         return []
 
 
-def parse_tweets(raw: List[Dict]) -> List[Dict]:
-    """将原始推文记录解析为结构化字段，并收集媒体列表（entities 和 includes）。
-    注意：按你的要求，不在此加入类型守卫，依赖 strict loader 确保 raw 为 List[Dict]。
-    """
-    out: List[Dict] = []
-    for t in raw:
-        media = []
-        ents = t.get("entities", {})
-        if isinstance(ents.get("media"), list):
-            for m in ents["media"]:
-                url = m.get("media_url") or m.get("url") or m.get("media_url_https")
-                if url:
-                    media.append({"id": m.get("id"), "type": m.get("type"), "url": url})
-
-        inc = t.get("includes", {})
-        if isinstance(inc.get("media"), list):
-            for m in inc["media"]:
-                url = m.get("url") or m.get("preview_image_url")
-                if url:
-                    media.append({"id": m.get("media_key") or m.get("id"), "type": m.get("type"), "url": url})
-
-        out.append({
-            "tweet_id": t.get("id"),
-            "created_at": t.get("created_at"),
-            "text": t.get("text", ""),
-            "author": t.get("author_username") or t.get("author_id"),
-            "permalink": t.get("url") or t.get("permalink"),
-            "media": media,
-        })
-    return out
 
 
 def analyze_each_tweet(text: List[Dict], use_proxy: bool = USE_OPENAI_PROXY) -> List[Dict[str, Any]]:
@@ -179,49 +135,7 @@ def save_json(path: str, data: List[Dict]) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def save_csv(path: str, rows: List[Dict]) -> None:
-    """将核心字段写入 CSV，避免换行与逗号干扰。"""
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["tweet_id", "created_at", "author", "text", "permalink", "media_count"])
-        for r in rows:
-            w.writerow([
-                r["tweet_id"],
-                r["created_at"],
-                r["author"],
-                (r.get("text") or "").replace("\n", " "),
-                r["permalink"],
-                len(r["media"]),
-            ])
 
-
-def _show_image(path: str) -> None:
-    """使用 matplotlib 显示本地图片文件。"""
-    try:
-        img = mpimg.imread(path)
-    except Exception as e:
-        print("[WARN] 打开图片失败:", e, " ->", path)
-        return
-    plt.figure(figsize=(4, 4))
-    plt.imshow(img)
-    plt.axis("off")
-    plt.tight_layout()
-    plt.show()
-
-
-def store_media_and_preview(rows: List[Dict], limit: int = 3) -> None:
-    """下载媒体到本地并在脚本中弹出 matplotlib 窗口预览前若干张图片。"""
-    ensured = ensure_media_dir()
-    shown = 0
-    for r in rows:
-        for m in r["media"]:
-            url = m["url"]
-            ext = os.path.splitext(url.split("?")[0])[1] or ".jpg"
-            fname = f"{r['tweet_id']}_{m.get('id','m')}{ext}"
-            lp = os.path.join(ensured, fname)
-            if download_file(url, lp) and ext.lower() in [".jpg", ".jpeg", ".png", ".gif"] and shown < limit:
-                _show_image(lp)
-                shown += 1
 
 
 # -----------------------
@@ -316,19 +230,19 @@ def test_all(latest_path):
 # -----------------------
 def run_once(username: str = TARGET_USER, count: int = TWEET_LIMIT):
     latest_path = LOCAL_JSON_PATH
-    # print("[RUN ] 开始接口获取:", username)
-    # raw = fetch_last_tweets(username, count)
-    # time.sleep(REQUEST_INTERVAL_SEC)  # 固定5秒，无重试
+    print("[RUN ] 开始接口获取:", username)
+    raw = fetch_last_tweets(username, count)
+    time.sleep(REQUEST_INTERVAL_SEC)  # 固定5秒，无重试
 
-    # ensure_media_dir()  # 确保目录存在
+    ensure_media_dir()  # 确保目录存在
     
-    # try:
-    #     with open(latest_path, "w", encoding="utf-8") as f:
-    #         json.dump(raw, f, ensure_ascii=False, indent=2)
-    #     print("[SAVE] 原始响应已写入:", latest_path)
-    # except Exception as e:
-    #     print("[ERR ] 写入本地原始JSON失败:", e)
-    #     # 即便写失败，也继续尝试解析内存数据
+    try:
+        with open(latest_path, "w", encoding="utf-8") as f:
+            json.dump(raw, f, ensure_ascii=False, indent=2)
+        print("[SAVE] 原始响应已写入:", latest_path)
+    except Exception as e:
+        print("[ERR ] 写入本地原始JSON失败:", e)
+        # 即便写失败，也继续尝试解析内存数据
     test_all(latest_path)
 
 
