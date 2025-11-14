@@ -50,9 +50,16 @@ REQUEST_INTERVAL_SEC = 5     # 请求间隔（固定5秒）
 MEDIA_DIR = os.path.join(os.path.dirname(__file__), "twitter_media")  # 媒体本地目录
 
 # Poe(OpenAI兼容)配置（如需使用 AI 分析）
-AI_API_KEY = "lUOtczZXbp6emUFgvqfZC7odtwGEhBdwmIAdTlpLHzs"  # 示例 Key（建议改为环境变量）
+AI_API_KEY = "nUYa1_xn1kqw1QN-AtfVrIRx8qU9Exs8bgo52mKaark"  # 示例 Key（建议改为环境变量）
 AI_BASE_URL = "https://api.poe.com/v1"
 AI_MODEL = "gpt-5"
+
+# OpenAI 代理开关与配置（按需启用）
+USE_OPENAI_PROXY = True  # 开关：True 使用下方代理，False 直连
+OPENAI_PROXY = {
+    "http": "http://localhost:1080",
+    "https": "http://localhost:1080",
+}
 
 # 本地调试数据路径（始终指向 latest.json，fetch 后覆盖写入）
 LOCAL_JSON_PATH = os.path.join(os.path.dirname(__file__), "twitter_media", "latest.json")
@@ -84,59 +91,13 @@ def download_file(url: str, local_path: str, timeout: int = 30) -> bool:
         return False
 
 
-def load_local_json_strict(path: str) -> List[Dict]:
-    """严格从本地 JSON 读取：原设计要求顶层为 list[dict]。
-    为增强鲁棒性，这里做向后兼容：
-    - 若顶层为 dict，优先尝试提取 data/tweets/results/items 等常见数组键；
-      若上述键不存在但存在单推文对象，则包装为单元素列表。
-    - 最终仍保证返回 List[Dict]，否则抛出 ValueError。
-    """
+def load_local_json_strict(path: str, page=1) -> List[Dict]:
+    """读取 latest.json，并直接返回其中 ['tweets'][0]，以单元素列表[List[Dict]]返回。"""
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-
-    # 已是标准 list[dict]
-    if isinstance(data, list):
-        for i, item in enumerate(data):
-            if not isinstance(item, dict):
-                snippet = str(item)
-                if len(snippet) > 120:
-                    snippet = snippet[:120] + "..."
-                raise ValueError(f"本地JSON第{i}项不是dict，实际类型={type(item)}，片段={snippet}")
-        return data
-
-    # 顶层是 dict，做兼容处理
-    if isinstance(data, dict):
-        # 优先提取常见数组字段
-        for key in ("data", "tweets", "results", "items"):
-            arr = data.get(key)
-            if isinstance(arr, list):
-                for i, item in enumerate(arr):
-                    if not isinstance(item, dict):
-                        snippet = str(item)
-                        if len(snippet) > 120:
-                            snippet = snippet[:120] + "..."
-                        raise ValueError(f"本地JSON.{key}[{i}] 不是dict，实际类型={type(item)}，片段={snippet}")
-                return arr
-
-        # 若存在明确的单条推文对象（例如 id/text/url 等），则包一层列表返回
-        possible_tweet_like_keys = {"id", "text", "url", "twitterUrl", "createdAt", "author"}
-        if any(k in data for k in possible_tweet_like_keys):
-            return [data]
-
-        # 若存在 pin_tweet / tweets 组合但 tweets 不是 list（极端场景），尝试忽略非 list 值
-        if "pin_tweet" in data and "tweets" in data and isinstance(data.get("tweets"), list):
-            arr = data["tweets"]
-            for i, item in enumerate(arr):
-                if not isinstance(item, dict):
-                    snippet = str(item)
-                    if len(snippet) > 120:
-                        snippet = snippet[:120] + "..."
-                    raise ValueError(f"本地JSON.tweets[{i}] 不是dict，实际类型={type(item)}，片段={snippet}")
-            return arr
-
-        raise ValueError(f"不支持的本地JSON(dict)布局，未找到数组字段(data/tweets/results/items)，文件={path}")
-
-    raise ValueError(f"本地JSON顶层必须是数组(list)或对象(dict)，当前类型={type(data)}，文件={path}")
+    first = data["tweets"][page]
+    # 确保返回 List[Dict]，若不是 dict 则包为 dict 保持下游签名
+    return str(first)
 
 
 def fetch_last_tweets(username: str, count: int = TWEET_LIMIT) -> List[Dict]:
@@ -198,6 +159,20 @@ def parse_tweets(raw: List[Dict]) -> List[Dict]:
     return out
 
 
+def analyze_each_tweet(text: List[Dict], use_proxy: bool = USE_OPENAI_PROXY) -> List[Dict[str, Any]]:
+    """依次分析每一条消息（解析后的每条推文），返回分析结果列表。
+    - 输入：parse_tweets 的输出 rows: List[Dict]
+    - 输出：List[Dict]，每一项包含 tweet_id、text 以及 ai_summary（字符串）
+    - 代理：默认跟随全局 USE_OPENAI_PROXY，可通过参数覆盖
+    """
+    if text.strip():
+        summary = ai_analyze_text(text, proxy=use_proxy)
+        print("[INFO] 推文分析结果:", summary)
+    else:
+        summary = "(空文本，跳过分析)"
+
+
+
 def save_json(path: str, data: List[Dict]) -> None:
     """将解析后的列表写入 JSON 文件（UTF-8，带缩进）。"""
     with open(path, "w", encoding="utf-8") as f:
@@ -252,45 +227,53 @@ def store_media_and_preview(rows: List[Dict], limit: int = 3) -> None:
 # -----------------------
 # AI 分析（可选）
 # -----------------------
-def ai_analyze_text(text: str, hint: str = "") -> str:
-    """调用 Poe(OpenAI兼容) 接口做简要分析；如环境无 openai，返回占位结果。"""
-    promot = """
-你是一个专业的加密货币交易分析师。请分析以下Twitter推文内容，判断其对交易的影响。
+def ai_analyze_text(text: str, proxy=False) -> str:
+    # 允许通过函数参数或全局 USE_OPENAI_PROXY 控制是否走代理
+    if proxy is None:
+        proxy = USE_OPENAI_PROXY
+    promot = f"""
+你是一个专业的加密货币交易分析师。请分析以下通过API接口获取到的Twitter推文内容，准确判断消息内容进行分析。
 
-推文内容：{text}
+接口获取到的内容：{text}
 
 分析要求：
-1. 识别是特定币种消息还是市场整体利好
-2. 判断交易方向（做多/做空/观望）
-3. 给出具体交易参数
 
-输出格式（必须严格JSON格式，使用中文标注）：
+优先识别并提取关键信息，再判断对市场和品种的影响
+判断交易方向（做多/做空/观望）
+给出具体交易参数
+输出格式案例（必须严格JSON格式，使用中文标注）：
 {{
-  "分析结果": "特定币种利好"或"市场整体利好"或"观望",
-  "交易币种": "BTC"或["BTC","ETH","BNB","SOL"],
-  "交易方向": "long"或"short"或"观望",
-  "是否基于图片": "是"或"否",
-  "分析依据": "明确提及Bitcoin突破关键价位，强烈看涨信号",
-  "预期消息对市场行情影响的持续时间":"分钟，小时，天",
-  "消息置信度":"0-100"
+"分析结果": "特定币种利好"或"市场整体利好"或"观望",
+"交易币种": "BTC",
+"交易方向": "long"或"short"或"观望",
+"是否基于图片": "是"或"否",
+"分析依据": "明确提及Bitcoin突破关键价位，强烈看涨信号",
+"预期消息对市场行情影响的持续时间":"分钟，小时，天",
+"消息置信度":"0-100"
 }}
-
-规则：
-- 严格输出JSON格式
-- 市场利好时交易主流币种(BTC/ETH/BNB/SOL)
-- 信号不明确时选择观望
-- 特定币种利好只交易该币种
-- 市场整体利好同时交易多个主流币种
-- 消息置信度 100 为100%可信
+交易币种 你自己去推断，输出单个币种或者多个币种的list
+预期消息对市场行情影响的持续时间，你给出的时间长度，输出 比如一天，1小时，1分钟
 """
-
-    prompt = hint or ("请基于以下推文文本做交易相关性与情绪的简要分析，并给出要点：\n" + (text or ""))
     try:
         import openai  # 延迟导入
-        client = openai.OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
+        # 代理支持：优先使用 httpx 客户端方式；失败则回退到环境变量
+        if proxy:
+            try:
+                from httpx import Client as _HttpxClient
+                # 修正：httpx 的参数为 proxies（dict 或 str），不是 proxy
+                http_client = _HttpxClient(proxies=OPENAI_PROXY, timeout=30.0)
+                client = openai.OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL, http_client=http_client)
+            except Exception:
+                import os as _os
+                _os.environ["HTTP_PROXY"] = OPENAI_PROXY.get("http", "")
+                _os.environ["HTTPS_PROXY"] = OPENAI_PROXY.get("https", "")
+                client = openai.OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
+        else:
+            client = openai.OpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
+
         chat = client.chat.completions.create(
             model=AI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": promot}],
             temperature=0.2,
             max_tokens=500,
         )
@@ -306,6 +289,26 @@ def ai_analyze_text(text: str, hint: str = "") -> str:
         return content or "(AI 无内容返回)"
     except Exception as e:
         return f"(AI 跳过：{e})"
+
+
+def test_all(latest_path):
+    # 调试期：一律从本地 strict 读取，保障数据结构健康
+    for i in range(1, 21):
+        raw_local = ''
+        try:
+            raw_local = load_local_json_strict(latest_path, page=i)
+            print("[INFO] 本地读取条数:", len(raw_local))
+        except Exception as e:
+            print("[FATAL] 本地JSON不符合严格结构:", e)
+            return {"ok": False, "error": str(e), "saved": latest_path}
+
+
+        try:
+            # 解析所有推文并依次分析
+            per_tweet = analyze_each_tweet(raw_local, use_proxy=USE_OPENAI_PROXY)
+            # 简要打印每条的摘要头部
+        except Exception as e:
+            print("[WARN] AI 分析失败:", e)
 
 
 # -----------------------
@@ -326,288 +329,10 @@ def run_once(username: str = TARGET_USER, count: int = TWEET_LIMIT):
     # except Exception as e:
     #     print("[ERR ] 写入本地原始JSON失败:", e)
     #     # 即便写失败，也继续尝试解析内存数据
+    test_all(latest_path)
 
 
-
-    # 调试期：一律从本地 strict 读取，保障数据结构健康
-    # try:
-    #     raw_local = load_local_json_strict(latest_path)
-    #     print("[INFO] 本地读取条数:", len(raw_local))
-    # except Exception as e:
-    #     print("[FATAL] 本地JSON不符合严格结构:", e)
-    #     return {"ok": False, "error": str(e), "saved": latest_path}
-
-
-
-
-    # rows = parse_tweets(raw_local)
-    # ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # parsed_json_path = os.path.join(MEDIA_DIR, f"parsed_{username}_{ts}.json")
-    # parsed_csv_path = os.path.join(MEDIA_DIR, f"parsed_{username}_{ts}.csv")
-    # try:
-    #     save_json(parsed_json_path, rows)
-    #     save_csv(parsed_csv_path, rows)
-    #     print("[SAVE] 解析结果 JSON:", parsed_json_path)
-    #     print("[SAVE] 解析结果 CSV :", parsed_csv_path)
-    # except Exception as e:
-    #     print("[ERR ] 保存解析结果失败:", e)
-
-    # # 媒体下载与预览
-    # try:
-    #     store_media_and_preview(rows, limit=3)
-    # except Exception as e:
-    #     print("[WARN] 媒体处理出现问题:", e)
-
-    # AI 文本聚合与分析（简单拼接前若干条）
-    text = """
-{
-      "type": "tweet",
-      "id": "1988883673144336473",
-      "url": "https://x.com/cz_binance/status/1988883673144336473",
-      "twitterUrl": "https://twitter.com/cz_binance/status/1988883673144336473",
-      "text": "Writing the book made me realize my English is poor, very poor.\n\nReviewing the Chinese translations by my colleagues made me realize my Chinese is non-existent. Had to use the dictionary constantly.\n\nBasically, I don't really speak any language. 😂",
-      "source": "Twitter for iPhone",
-      "retweetCount": 58,
-      "replyCount": 820,
-      "likeCount": 1217,
-      "quoteCount": 24,
-      "viewCount": 125890,
-      "createdAt": "Thu Nov 13 08:16:34 +0000 2025",
-      "lang": "en",
-      "bookmarkCount": 26,
-      "isReply": false,
-      "inReplyToId": null,
-      "conversationId": "1988883673144336473",
-      "displayTextRange": [
-        0,
-        247
-      ],
-      "inReplyToUserId": null,
-      "inReplyToUsername": null,
-      "author": {
-        "type": "user",
-        "userName": "cz_binance",
-        "url": "https://x.com/cz_binance",
-        "twitterUrl": "https://twitter.com/cz_binance",
-        "id": "902926941413453824",
-        "name": "CZ 🔶 BNB",
-        "isVerified": false,
-        "isBlueVerified": true,
-        "verifiedType": null,
-        "profilePicture": "https://pbs.twimg.com/profile_images/1961440580279336960/PiiIs8Lh_normal.jpg",
-        "coverPicture": "https://pbs.twimg.com/profile_banners/902926941413453824/1597864552",
-        "description": "",
-        "location": "",
-        "followers": 10480803,
-        "following": 1237,
-        "status": "",
-        "canDm": false,
-        "canMediaTag": true,
-        "createdAt": "Wed Aug 30 16:12:13 +0000 2017",
-        "entities": {
-          "description": {
-            "urls": []
-          },
-          "url": {}
-        },
-        "fastFollowersCount": 0,
-        "favouritesCount": 17541,
-        "hasCustomTimelines": true,
-        "isTranslator": false,
-        "mediaCount": 922,
-        "statusesCount": 7364,
-        "withheldInCountries": [],
-        "affiliatesHighlightedLabel": {},
-        "possiblySensitive": false,
-        "pinnedTweetIds": [
-          "1981404850832494666"
-        ],
-        "profile_bio": {
-          "description": "@BNBchain\n@YZiLabs\n@GiggleAcademy\n@binance",
-          "entities": {
-            "description": {
-              "user_mentions": [
-                {
-                  "id_str": "0",
-                  "indices": [
-                    0,
-                    9
-                  ],
-                  "name": "",
-                  "screen_name": "BNBchain"
-                },
-                {
-                  "id_str": "0",
-                  "indices": [
-                    10,
-                    18
-                  ],
-                  "name": "",
-                  "screen_name": "YZiLabs"
-                },
-                {
-                  "id_str": "0",
-                  "indices": [
-                    19,
-                    33
-                  ],
-                  "name": "",
-                  "screen_name": "GiggleAcademy"
-                },
-                {
-                  "id_str": "0",
-                  "indices": [
-                    34,
-                    42
-                  ],
-                  "name": "",
-                  "screen_name": "binance"
-                }
-              ]
-            },
-            "url": {
-              "urls": [
-                {
-                  "display_url": "binance.com",
-                  "expanded_url": "http://www.binance.com",
-                  "indices": [
-                    0,
-                    23
-                  ],
-                  "url": "https://t.co/zlvCSBIFGA"
-                }
-              ]
-            }
-          }
-        },
-        "isAutomated": false,
-        "automatedBy": null
-      },
-      "extendedEntities": {},
-      "card": null,
-      "place": {},
-      "entities": {},
-      "quoted_tweet": {
-        "type": "tweet",
-        "id": "1988882854378344501",
-        "url": "https://x.com/ZiksMeta/status/1988882854378344501",
-        "twitterUrl": "https://twitter.com/ZiksMeta/status/1988882854378344501",
-        "text": "@cz_binance Will your book be available in both soft and hard copy all over the world?",
-        "source": "Twitter for iPhone",
-        "retweetCount": 1,
-        "replyCount": 6,
-        "likeCount": 19,
-        "quoteCount": 1,
-        "viewCount": 127694,
-        "createdAt": "Thu Nov 13 08:13:18 +0000 2025",
-        "lang": "en",
-        "bookmarkCount": 2,
-        "isReply": true,
-        "inReplyToId": "1988882745989153243",
-        "conversationId": "1988882745989153243",
-        "displayTextRange": [
-          12,
-          86
-        ],
-        "inReplyToUserId": null,
-        "inReplyToUsername": null,
-        "author": {
-          "type": "user",
-          "userName": "ZiksMeta",
-          "url": "https://x.com/ZiksMeta",
-          "twitterUrl": "https://twitter.com/ZiksMeta",
-          "id": "1561355648595533831",
-          "name": "Liquid",
-          "isVerified": false,
-          "isBlueVerified": true,
-          "verifiedType": null,
-          "profilePicture": "https://pbs.twimg.com/profile_images/1986094531574407168/hx2qB_uW_normal.jpg",
-          "coverPicture": "https://pbs.twimg.com/profile_banners/1561355648595533831/1760161471",
-          "description": "",
-          "location": "In Profit",
-          "followers": 2565,
-          "following": 2084,
-          "status": "",
-          "canDm": false,
-          "canMediaTag": true,
-          "createdAt": "Sun Aug 21 14:13:54 +0000 2022",
-          "entities": {
-            "description": {
-              "urls": []
-            },
-            "url": {}
-          },
-          "fastFollowersCount": 0,
-          "favouritesCount": 9736,
-          "hasCustomTimelines": true,
-          "isTranslator": false,
-          "mediaCount": 301,
-          "statusesCount": 8817,
-          "withheldInCountries": [],
-          "affiliatesHighlightedLabel": {},
-          "possiblySensitive": false,
-          "pinnedTweetIds": [
-            "1985797692358869052"
-          ],
-          "profile_bio": {
-            "description": "6+ years in Crypto |Web3 |Marketing📊 |Community Builder👷‍♂️ |ReplyGuy👨‍💻 |Degen💹  |Posts are NFA | Always DYOR",
-            "entities": {
-              "description": {},
-              "url": {
-                "urls": [
-                  {
-                    "display_url": "doginaldogs.com",
-                    "expanded_url": "http://doginaldogs.com",
-                    "indices": [
-                      0,
-                      23
-                    ],
-                    "url": "https://t.co/yGyuYFVDT5"
-                  }
-                ]
-              }
-            }
-          },
-          "isAutomated": false,
-          "automatedBy": null
-        },
-        "extendedEntities": {},
-        "card": null,
-        "place": {},
-        "entities": {
-          "user_mentions": [
-            {
-              "id_str": "902926941413453824",
-              "indices": [
-                0,
-                11
-              ],
-              "name": "CZ 🔶 BNB",
-              "screen_name": "cz_binance"
-            }
-          ]
-        },
-        "quoted_tweet": null,
-        "retweeted_tweet": null,
-        "isLimitedReply": false,
-        "article": null
-      },
-      "retweeted_tweet": null,
-      "isLimitedReply": false,
-      "article": null
-    }
-
-"""
-    try:
-        sample_text = text
-        if sample_text.strip():
-            ai_summary = ai_analyze_text(sample_text)
-            print("[AI  ] 摘要：\n", ai_summary)
-        else:
-            print("[AI  ] 无文本样本，跳过分析")
-    except Exception as e:
-        print("[WARN] AI 分析失败:", e)
-
+    
 
 
 if __name__ == "__main__":
