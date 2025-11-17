@@ -70,7 +70,7 @@ class AIConfig:
     enabled: bool = True
 
     # AI 路由超时时间（秒）
-    router_timeout_sec: float = 30.0
+    router_timeout_sec: float = 60.0
 
     # ===== Poe(OpenAI 兼容)配置（当前直接硬编码，方便你本地快速联调。
     # 实盘前强烈建议改为从环境变量或独立配置文件加载）=====
@@ -97,6 +97,24 @@ class TwitterAPIConfig:
     # 用户最近推文 API 的路径部分
     # 示例完整 URL: f"{api_base}{user_last_tweets_path}?username=xxx&limit=10"
     user_last_tweets_path: str = "/twitter/user/last_tweets"
+
+    # 用户简介映射表：用于 AI 分析时补充作者背景信息
+    # 硬编码多个行业影响力人物，便于 AI 理解其身份背景与发言可信度
+    # 后续可改为从 CSV/JSON 文件动态加载
+    user_intro_mapping: Dict[str, str] = field(
+        default_factory=lambda: {
+            "cz_binance": "BINANCE创始人，全球最大加密货币交易所龙头",
+            "haydenzadams": "Uniswap协议创始人，DeFi领域先驱",
+            "elonmusk": "特斯拉、SpaceX创始人，科技与加密领域意见领袖",
+            "VitalikButerin": "以太坊创始人，区块链技术核心架构师",
+            "justinsuntron": "TRON创始人，数字资产倡导者",
+            "SBF_FTX": "FTX交易所创始人，加密衍生品领域专家",
+            "aantonop": "比特币先驱，区块链技术布道者",
+            "DocumentingBTC": "比特币与闪电网络观察者",
+            "APompliano": "加密资产投资专家，市场分析师",
+            "CryptoByzantine": "区块链安全与共识机制研究者",
+        }
+    )
 
     @property
     def user_last_tweets_url(self) -> str:

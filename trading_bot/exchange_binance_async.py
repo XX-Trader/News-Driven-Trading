@@ -185,11 +185,7 @@ class BinanceAsyncClient:
             headers["X-MBX-APIKEY"] = self.api_key
 
             # 添加 timestamp 与 recvWindow 并签名
-            # 参考 binance.Binance._sign：为避免时间戳超前，适当减去 1 秒
-            try:
-                timestamp = int((time.time() - 1) * 1000)
-            except Exception:
-                timestamp = int(time.time() * 1000)
+            timestamp = int(time.time() * 1000)
             params.setdefault("recvWindow", self.exchange_conf.recv_window)
             params["timestamp"] = timestamp
             query_str = "&".join(f"{k}={v}" for k, v in sorted(params.items()))

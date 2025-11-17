@@ -1,55 +1,386 @@
 """
 trading_bot.twitter_source
 
-一个极简的 Twitter 信号源实现，用于开发 / 测试阶段。
-这里我们不调用真实 Twitter 接口，也不依赖你之前的大脚本，
-而是直接在内存中写几条“假推文”，用来测试 trading_bot 的整体流程。
+推特数据源抽象层。支持多种推文获取方式：
+1. 并发 API 抓取多个用户的推文（twitterapi.io）
+2. 本地 JSON 文件扫描（降级方案）
+3. 推文 ID 去重缓存（避免重复 AI 分析）
 
-后续如果要接入真实 Twitter API，只需要改这里的实现，
-保持 fetch_latest_tweets 的函数签名不变即可。
+设计理念：
+- fetch_latest_tweets() 作为唯一数据入口
+- 支持"测试→生产"无缝切换
+- 已处理推文 ID 存储在 processed_ids.json，下次无需重复 AI 分析
 """
 
-from __future__ import annotations  # 允许在类型注解里引用后面才定义的类型（前向引用）
+from __future__ import annotations
 
-from typing import Any, Dict, List  # 导入常用类型别名：任意类型、字典、列表
+import asyncio
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
+if TYPE_CHECKING:
+    import aiohttp as aiohttp_typing
+
+try:
+    from config import TwitterAPIConfig, load_config
+except ImportError:
+    from .config import TwitterAPIConfig, load_config
 
 
-# 注意：
-# 这里刻意不引入任何网络库（如 requests、aiohttp），
-# 只做开发阶段的“内存假数据”实现，避免增加不必要依赖和错误面。
+# ==================== 日志存储 ====================
 
+def _get_user_logs_path(username: str) -> Path:
+    """获取用户推文日志文件路径（JSONL 格式）"""
+    base_dir = Path(__file__).resolve().parent.parent
+    logs_dir = base_dir / "推特抢跑" / "twitter_media" / "user_logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    return logs_dir / f"{username}.jsonl"
+
+
+def _append_tweet_to_jsonl(username: str, tweet: Dict[str, Any]) -> None:
+    """将推文追加写入 JSONL 文件（每行一个 JSON 对象）"""
+    try:
+        log_path = _get_user_logs_path(username)
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(tweet, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[TWITTER_API] 写入推文日志失败: {e}")
+
+
+# ==================== 缓存管理 ====================
+
+def _get_processed_ids_path() -> Path:
+    """获取已处理推文 ID 缓存文件路径"""
+    base_dir = Path(__file__).resolve().parent.parent
+    media_dir = base_dir / "推特抢跑" / "twitter_media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    return media_dir / "processed_ids.json"
+
+
+def load_processed_ids() -> Set[str]:
+    """从本地 JSON 加载已处理的推文 ID"""
+    path = _get_processed_ids_path()
+    if not path.exists():
+        return set()
+    
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # data 可能是 list 或 dict{"ids": [...]}
+        if isinstance(data, dict):
+            return set(str(id_) for id_ in data.get("ids", []))
+        elif isinstance(data, list):
+            return set(str(id_) for id_ in data)
+        return set()
+    except Exception as e:
+        print(f"[TWITTER_API] 读取 processed_ids 失败: {e}")
+        return set()
+
+
+def save_processed_ids(ids: Set[str]) -> None:
+    """将已处理的推文 ID 保存到本地 JSON"""
+    path = _get_processed_ids_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"ids": sorted(list(ids))}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[TWITTER_API] 保存 processed_ids 失败: {e}")
+
+
+def mark_as_processed(tweet_ids: List[str]) -> None:
+    """标记推文 ID 为已处理（追加到缓存）"""
+    processed = load_processed_ids()
+    processed.update(str(id_) for id_ in tweet_ids)
+    save_processed_ids(processed)
+
+
+# ==================== 本地 JSON 读取 ====================
+
+def fetch_latest_tweets_from_local_json() -> List[Dict[str, Any]]:
+    """
+    从 推特抢跑/twitter_media/ 目录扫描所有 JSON 文件，
+    合并为推文列表返回。
+    
+    支持两种 JSON 格式：
+    1. 单条推文：{"id": "xxx", "text": "...", "user_name": "..."}
+    2. 推文列表：[{"id": "..."}, {"id": "..."}, ...]
+    
+    返回：
+    - 去重后的推文列表，每条至少包含 id、text、user_name 字段
+    """
+    base_dir = Path(__file__).resolve().parent.parent
+    media_dir = base_dir / "推特抢跑" / "twitter_media"
+    
+    if not media_dir.exists():
+        print(f"[TWITTER_API] media_dir not found: {media_dir}")
+        return []
+    
+    tweets: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    
+    # 扫描所有 .json 文件
+    for json_file in sorted(media_dir.glob("*.json")):
+        # 跳过处理文件
+        if json_file.name in ("processed_ids.json",):
+            continue
+        
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            # 处理单条推文 or 推文列表
+            items = []
+            if isinstance(data, dict):
+                # 检查是否是单条推文（有 id、text 字段）
+                if "id" in data and "text" in data:
+                    items = [data]
+                else:
+                    # 可能是 {"tweets": [...]} 格式
+                    items = data.get("tweets", [])
+            elif isinstance(data, list):
+                items = data
+            
+            # 添加到结果，去重
+            for item in items:
+                if isinstance(item, dict):
+                    item_id = str(item.get("id", ""))
+                    if item_id and item_id not in seen_ids:
+                        seen_ids.add(item_id)
+                        tweets.append(item)
+        
+        except Exception as e:
+            print(f"[TWITTER_API] 读取 {json_file.name} 失败: {e}")
+    
+    return tweets
+
+
+# ==================== API 并发抓取 ====================
+
+async def _fetch_for_user_async(
+    session: Any,
+    username: str,
+    config: TwitterAPIConfig,
+    timeout: float = 30.0
+) -> List[Dict[str, Any]]:
+    """
+    异步调用 API 获取单个用户的推文。
+    
+    参数：
+    - session: aiohttp ClientSession
+    - username: 推特用户名（不含@）
+    - config: TwitterAPIConfig 配置
+    - timeout: 请求超时（秒）
+    
+    返回：推文列表（支持多格式兼容）
+    """
+    params = {
+        "userName": username.lstrip("@"),
+        "count": 10,  # 单次获取 10 条
+    }
+    headers = {"X-API-Key": config.api_key}
+    
+    try:
+        async with session.get(
+            config.user_last_tweets_url,
+            params=params,
+            headers=headers,
+            timeout=timeout
+        ) as resp:
+            if resp.status != 200:
+                print(f"[TWITTER_API] {username} 请求失败: {resp.status}")
+                return []
+            
+            data = await resp.json()
+            
+            # 多格式兼容：dict 或 list
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                # 尝试多个常见字段
+                return data.get("data") or data.get("tweets") or data.get("results") or []
+            return []
+    
+    except asyncio.TimeoutError:
+        print(f"[TWITTER_API] {username} 请求超时（{timeout}s）")
+        return []
+    except Exception as e:
+        print(f"[TWITTER_API] {username} 请求异常: {e}")
+        return []
+
+
+async def fetch_latest_tweets_from_api() -> List[Dict[str, Any]]:
+    """
+    并发抓取多个用户的推文，支持 ID 去重与缓存。
+    
+    流程：
+    1. 从 config.twitter_api.user_intro_mapping 获取用户列表
+    2. 并发调用 API 获取所有用户的推文
+    3. 去除已在 processed_ids.json 中的推文，输出跳过日志
+    4. 返回新推文列表
+    
+    注意：API 失败时输出警告，不自动降级
+    """
+    if aiohttp is None:
+        print("[TWITTER_API] ⚠️ aiohttp 未安装，无法调用 API。建议：pip install aiohttp")
+        return []
+    
+    config = load_config()
+    usernames = list(config.twitter_api.user_intro_mapping.keys())
+    
+    if not usernames:
+        print("[TWITTER_API] ⚠️ 用户列表为空，无法抓取推文")
+        return []
+    
+    print(f"[TWITTER_API] 并发抓取 {len(usernames)} 个用户的推文...")
+    
+    try:
+        # 并发调用 API
+        async with aiohttp.ClientSession() as session:
+            tasks = [
+                _fetch_for_user_async(session, username, config.twitter_api)
+                for username in usernames
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 合并结果 + 去重
+        all_tweets: List[Dict[str, Any]] = []
+        seen_ids: Set[str] = set()
+        processed_ids = load_processed_ids()
+        skipped_count = 0
+        
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+            if isinstance(result, list):
+                for tweet in result:
+                    if isinstance(tweet, dict):
+                        tweet_id = str(tweet.get("id", ""))
+                        if not tweet_id:
+                            continue
+                        
+                        # 检查是否已处理（历史缓存）- 直接跳过，无日志
+                        if tweet_id in processed_ids:
+                            skipped_count += 1
+                            continue
+                        
+                        # 检查本次会话是否重复
+                        if tweet_id in seen_ids:
+                            continue
+                        
+                        seen_ids.add(tweet_id)
+                        all_tweets.append(tweet)
+                        
+                        # 记录推文到 JSONL（获取用户名）
+                        username = tweet.get("user_name") or tweet.get("author") or "unknown"
+                        _append_tweet_to_jsonl(username, tweet)
+        
+        if all_tweets:
+            print(f"[TWITTER_API] 获取 {len(all_tweets)} 条新推文，跳过 {skipped_count} 条已处理推文")
+        else:
+            if skipped_count > 0:
+                print(f"[TWITTER_API] 无新推文（全部 {skipped_count} 条已处理）")
+            else:
+                print("[TWITTER_API] 无新推文")
+        
+        return all_tweets
+    
+    except Exception as e:
+        print(f"[TWITTER_API] ⚠️ API 抓取失败: {e}。建议检查网络连接或 API 配置")
+        return []
+
+
+# ==================== 异步入口 ====================
 
 async def fetch_latest_tweets() -> List[Dict[str, Any]]:
     """
-    提供给 trading_bot.app_runner 使用的异步接口。
-
-    设计约定：
-    - 函数是 async 的（协程），方便之后切换成真正的网络请求；
-    - 返回一个列表 List[Dict[str, Any]]，列表里的每一条字典代表一条 tweet；
-    - 每条 tweet 至少包含以下字段（满足 app_runner.TwitterCrawlerSignalSource 的需求）：
-        - id: 推文 ID，字符串形式（可以是任意唯一标识）；
-        - text: 推文内容（英文 / 中文都可以）；
-        - user_name: 用户名（不带 @ 符号）。
-
-    当前实现：
-    - 直接返回两条写死的假推文；
-    - 第一条偏多头（long）；
-    - 第二条偏空头（short）；
-    方便我们测试 app_runner 里简单的关键字判断逻辑（long/short -> BUY/SELL）。
+    获取最新推文的异步接口（推荐方法）。
+    
+    版本切换说明：
+    - 初期测试：使用本地版本
+    - 后期集成：使用 API 版本
+    
+    在 app_runner.py 中的调用处选择其中一个：
+      # return await fetch_latest_tweets_from_api_with_logging()     # 后期：真实 API
+      # return await fetch_latest_tweets_from_local_with_logging()   # 初期：本地测试
+    
+    返回：推文列表，每条至少包含 id、text 字段
     """
+    # 【初期开发推荐】使用本地版本测试
+    return await fetch_latest_tweets_from_local_with_logging()
 
-    # 返回一个包含两个元素的列表，每个元素是一个字典，代表一条 tweet
-    return [
-        {
-            "id": "test-1",  # 第一条假推文的 ID，随便取一个容易辨认的字符串
-            # 推文文本内容，包含 "long" 和 "BTC" 等关键字，用于测试做多逻辑
-            "text": "Bitcoin looks strong here, I am going long BTC.",
-            "user_name": "cz_binance",  # 推文作者用户名，模拟来自 cz_binance 账号
-        },
-        {
-            "id": "test-2",  # 第二条假推文的 ID
-            # 推文文本内容，包含 "short" 和 "ETH" 等关键字，用于测试做空逻辑
-            "text": "I think we might see some correction on ETH, maybe time to short a bit.",
-            "user_name": "realDonaldTrump",  # 推文作者用户名，模拟来自 realDonaldTrump 账号
-        },
-    ]
+async def fetch_latest_tweets_from_api_with_logging() -> List[Dict[str, Any]]:
+    """
+    【版本 A - API 版】并发抓取多个用户的推文（后期集成）
+    
+    配置项：需要设置 TwitterAPIConfig 中的 api_key 和其他参数
+    推荐用途：生产环境，真实推特数据
+    
+    流程同 fetch_latest_tweets_from_api()，支持 JSONL 日志记录
+    """
+    return await fetch_latest_tweets_from_api()
+
+
+async def fetch_latest_tweets_from_local_with_logging() -> List[Dict[str, Any]]:
+    """
+    【版本 B - 本地版】从本地 JSON 读取推文并记录到 JSONL（初期测试推荐）
+    
+    配置项：无需 API 密钥，直接读取 推特抢跑/twitter_media/*.json
+    推荐用途：初期开发、功能验证、快速迭代
+    
+    特性：
+    - 支持与 API 版本相同的 JSONL 日志记录
+    - 无网络依赖，速度快
+    - 适合全流程功能验证
+    """
+    tweets = fetch_latest_tweets_from_local_json()
+    
+    # 记录到 JSONL
+    for tweet in tweets:
+        username = tweet.get("user_name") or tweet.get("author") or "unknown"
+        _append_tweet_to_jsonl(username, tweet)
+    
+    return tweets
+
+
+# ==================== v1.4.0 动态触发框架说明（仅框架，待后期实现）====================
+#
+# 背景：目前推特查询是定时固定执行的。后期需要根据 K 线信号（如成交量异动）动态启动。
+#
+# 框架设计思路：
+# 1. 监听 K 线成交量异动信号（来自 signals.py）
+# 2. 触发条件满足时启动 10 分钟的查询周期
+# 3. 查询间隔：每 5 秒查询一次
+# 4. 支持动态用户列表切换（根据异动币种切换查询的意见领袖）
+#
+# 伪代码框架（待实现）：
+#
+#   class TwitterTrigger:
+#       def __init__(self, duration_seconds: int = 600, interval_seconds: float = 5):
+#           self.duration = duration_seconds
+#           self.interval = interval_seconds
+#           self.trigger_start_time: Optional[float] = None
+#           self.active_usernames: List[str] = []
+#       
+#       def is_triggered(self, signal: Dict[str, Any]) -> bool:
+#           """检查成交量异动信号"""
+#           pass
+#       
+#       def get_active_users(self, signal: Dict[str, Any]) -> List[str]:
+#           """根据异动币种返回相关意见领袖列表"""
+#           pass
+#       
+#       async def run_trigger_window(self, fetch_func, signal):
+#           """执行 10 分钟查询窗口（5 秒间隔）"""
+#           pass
+#
+# 集成方案（待实现）：
+# - 在 app_runner.py 中监听信号流
+# - 当检测到成交量异动时，启动 TwitterTrigger 实例
+# - 10 分钟后自动停止，恢复定时查询模式
+    return await fetch_latest_tweets_from_api()
