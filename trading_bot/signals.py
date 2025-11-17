@@ -15,7 +15,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional, List
 
-from .domain import TradeSignal
+
+try:
+    from domain import TradeSignal
+except ImportError:  # pragma: no cover
+    from .domain import TradeSignal
 
 
 class SignalSource(ABC):

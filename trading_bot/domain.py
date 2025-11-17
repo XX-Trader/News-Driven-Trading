@@ -14,7 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
-from .config import RiskConfig, ExchangeConfig
+try:
+    from config import RiskConfig, ExchangeConfig
+except ImportError:
+    from .config import RiskConfig, ExchangeConfig
 
 
 # --------------------

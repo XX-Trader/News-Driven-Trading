@@ -21,8 +21,11 @@ from typing import Any, Dict, List, Optional
 
 import asyncio
 
-from .config import AIConfig
 
+try:
+    from config import AIConfig 
+except ImportError:
+    from .config import AIConfig
 
 @dataclass
 class AIInput:

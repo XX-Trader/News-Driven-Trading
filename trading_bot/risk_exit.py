@@ -16,8 +16,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 
-from .config import RiskConfig
-from .domain import Position, StrategyConfig, ExitDecision
+
+try:
+    from config import RiskConfig
+except ImportError:
+    from .config import RiskConfig
+
+try:
+    from domain import Position, StrategyConfig, ExitDecision
+except ImportError:
+    from .domain import Position, StrategyConfig, ExitDecision
+
 
 
 # --------------------

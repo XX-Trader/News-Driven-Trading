@@ -15,7 +15,11 @@ from typing import Optional, Tuple
 
 import aiohttp
 
-from .config import AppConfig, ProxyConfig
+
+try:
+    from config import AppConfig, ProxyConfig
+except ImportError:
+    from .config import AppConfig, ProxyConfig
 
 
 class NetworkContext:

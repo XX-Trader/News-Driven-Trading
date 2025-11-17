@@ -20,7 +20,17 @@ import asyncio
 import signal
 from typing import Optional
 
-from .app_runner import start_trading_app
+# 为了兼容两种运行方式：
+# 1) 在项目根目录用 `python main.py` / `python -m trading_bot.main` 启动整个系统；
+# 2) 在 VSCode 里直接对本文件执行 `python trading_bot/main.py` 做单文件调试；
+# 这里不使用相对导入，改为从包入口导入。
+try:
+    # 当以“包”方式运行（推荐）：python -m trading_bot.main
+    from trading_bot.app_runner import start_trading_app
+except ModuleNotFoundError:
+    # 当 VSCode 直接 `python trading_bot/main.py` 时，
+    # 当前文件所在目录会被加到 sys.path，这里兜底为本地导入。
+    from app_runner import start_trading_app  # type: ignore
 
 
 def _run_async(coro) -> None:

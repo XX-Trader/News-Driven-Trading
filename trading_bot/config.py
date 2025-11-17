@@ -38,10 +38,10 @@ class ExchangeConfig:
     api_key_env: str = "BINANCE_API_KEY"
     api_secret_env: str = "BINANCE_API_SECRET"
     base_url: str = "https://api.binance.com"
-    recv_window: int = 5000
+    recv_window: int = 50000
     request_timeout_sec: float = 10.0
     use_testnet: bool = False  # 虽然当前目标是实盘，但仍保留 testnet 选项
-    dry_run: bool = True  # 强烈建议开发/调试阶段保持 True，实盘时显式改为 False
+    dry_run: bool = False  # 强烈建议开发/调试阶段保持 True，实盘时显式改为 False
 
     quote_asset_for_position: str = "USDT"  # 用于计算仓位的计价资产，比如 USDT
 
@@ -64,11 +64,44 @@ class RiskConfig:
 
 @dataclass
 class AIConfig:
-    """AI 模型相关配置（目前先保留占位，后续接入具体模型）"""
+    """AI 模型相关配置"""
 
-    enabled: bool = False
-    router_timeout_sec: float = 5.0
+    # 是否启用 AI 分析
+    enabled: bool = True
+
+    # AI 路由超时时间（秒）
+    router_timeout_sec: float = 30.0
+
+    # ===== Poe(OpenAI 兼容)配置（当前直接硬编码，方便你本地快速联调。
+    # 实盘前强烈建议改为从环境变量或独立配置文件加载）=====
+    poe_api_key: str = (
+        "bvJrIZp3bug_ZHHvkBTQmN_HanLRg-J6yEpRwAocESw"  # 示例 Key
+    )
+    poe_base_url: str = "https://api.poe.com/v1"
+    poe_model: str = "gpt-5.1"
+
+    # 预留多模型路由的配置（当前不使用）
     models: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class TwitterAPIConfig:
+    """Twitter 推文接口配置（当前使用 twitterapi.io 服务）"""
+
+    # 接口密钥，放在请求头 X-API-Key 中
+    api_key: str = "new1_58fe956453e744e4844728c68ba187d4"
+
+    # 基础域名，便于后续扩展不同 endpoint，避免到处硬编码
+    api_base: str = "https://api.twitterapi.io"
+
+    # 用户最近推文 API 的路径部分
+    # 示例完整 URL: f"{api_base}{user_last_tweets_path}?username=xxx&limit=10"
+    user_last_tweets_path: str = "/twitter/user/last_tweets"
+
+    @property
+    def user_last_tweets_url(self) -> str:
+        """组合完整的最近推文 URL"""
+        return f"{self.api_base}{self.user_last_tweets_path}"
 
 
 @dataclass
@@ -79,6 +112,7 @@ class AppConfig:
     exchange: ExchangeConfig = field(default_factory=ExchangeConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     ai: AIConfig = field(default_factory=AIConfig)
+    twitter_api: TwitterAPIConfig = field(default_factory=TwitterAPIConfig)
 
 
 # --------------------
@@ -95,23 +129,37 @@ def load_config() -> AppConfig:
     """
     构建并返回应用配置。
 
-    当前实现为：
-    - 绝大多数值使用 dataclass 默认值；
-    - 关键敏感信息（如 API KEY）从环境变量中读取；
-    - 若未来需要从文件加载，可在此函数中扩展。
+    当前实现：
+    - 大部分值用 dataclass 默认值；
+    - 敏感信息优先从环境变量读取，若没有则使用代码中的“开发环境默认值”（你当前提供的 key）；
+    - 后续可以改成从独立配置文件加载。
     """
     app_config = AppConfig()
 
-    # 从环境变量覆盖部分配置（如有）
+    # --------------------
+    # Binance API Key 处理
+    # --------------------
     api_key_env_name = app_config.exchange.api_key_env
     api_secret_env_name = app_config.exchange.api_secret_env
 
-    # 实际 key/secret 的具体值不存入 config 对象中，由使用方再次从环境变量读取。
-    # 这里只是保留“变量名”，便于统一管理。
-    _ = load_env_var(api_key_env_name)
-    _ = load_env_var(api_secret_env_name)
+    # 1. 优先尝试从环境变量读取
+    api_key = load_env_var(api_key_env_name)
+    api_secret = load_env_var(api_secret_env_name)
 
-    # DRY_RUN 也允许通过环境变量覆盖
+    # 2. 如果环境变量不存在，就使用你当前提供的 key（仅作为开发环境默认值）
+    if api_key is None:
+        api_key = "sFgmh9GNjGpUyWZ1ebI7HVMRDXHTFzJ4t8VJj08K1EmcTf6w4C9vWVcDuXqdW02t"
+    if api_secret is None:
+        api_secret = "c5ios8fEtgrvjpRAWyryInzRFyqAsBLBxFIW7AUoxjdpKEOdyGNaZCsAOg54WKTD"
+
+    # 3. 将“解析后的 key/secret”挂在 exchange 配置上，供后续客户端使用
+    #    注意：下划线前缀表示“内部使用字段”，后续如果要改回纯环境变量方式，直接删掉这两行即可。
+    setattr(app_config.exchange, "_resolved_api_key", api_key)
+    setattr(app_config.exchange, "_resolved_api_secret", api_secret)
+
+    # --------------------
+    # DRY_RUN 覆盖逻辑
+    # --------------------
     dry_run_env = load_env_var("TRADING_BOT_DRY_RUN")
     if dry_run_env is not None:
         app_config.exchange.dry_run = dry_run_env.lower() in {"1", "true", "yes", "on"}
