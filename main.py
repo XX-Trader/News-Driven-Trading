@@ -8,18 +8,6 @@ import trading_bot
 # 内部依然复用 trading_bot.main 模块中的 main()，保持包结构清晰。
 
 
-async def _run_trading_bot() -> None:
-    """
-    根目录入口的异步封装函数。
-
-    从 trading_bot.main 中导入 main() 并调用，避免在导入阶段就执行逻辑，
-    也避免循环导入问题。
-    """
-    # 延迟导入，确保当前目录已在 sys.path 中，并且 trading_bot 被当成包加载
-    from trading_bot.main import main as trading_bot_main  # type: ignore
-
-    await trading_bot_main()
-
 
 def main() -> None:
     """

@@ -92,23 +92,6 @@ def ai_analyze_text(text: str, author: str, introduction: str) -> str:
         return f"(AI 错误：{e})"
 
 
-def call_ai_for_tweet(text: str, author: str, introduction: str) -> Dict[str, Any]:
-    """
-    调用 AI 分析推文，返回结构化结果。
-    
-    返回：
-    - 若 AI 返回有效 JSON，解析后返回 dict
-    - 若返回非 JSON，包装为 {"raw": 原始字符串}
-    """
-    raw = ai_analyze_text(text, author, introduction)
-    
-    if not raw:
-        return {"raw": "(空响应)"}
-    
-    try:
-        return json.loads(raw)
-    except Exception:
-        return {"raw": raw}
 
 
 def normalize_symbol_from_ai(ai_res: Dict[str, Any]) -> Optional[str]:
@@ -169,11 +152,18 @@ async def call_ai_for_tweet_async(
     
     # 在线程池中运行同步 AI 调用，避免阻塞
     try:
-        result = await asyncio.wait_for(
-            loop.run_in_executor(None, call_ai_for_tweet, text, author, introduction),
+        raw_result = await asyncio.wait_for(
+            loop.run_in_executor(None, ai_analyze_text, text, author, introduction),
             timeout=timeout
         )
-        return result
+        
+        # 尝试解析 AI 返回的 JSON 结果
+        try:
+            import json
+            return json.loads(raw_result)
+        except json.JSONDecodeError:
+            # 如果不是 JSON，返回原始字符串包装
+            return {"raw": raw_result}
     except asyncio.TimeoutError:
         print(f"[AI_ASYNC] timeout after {timeout}s for tweet by {author}")
         raise

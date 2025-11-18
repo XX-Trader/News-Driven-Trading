@@ -1,14 +1,14 @@
 # News-Driven-Trading 完整实现文档
 
 ## 版本信息
-- **版本号**：v1.0.0
-- **日期**：2025-11-17
+- **版本号**：v1.3.3
+- **日期**：2025-11-17 北京时间
 - **更新内容**：
-  - ✨ 推特 API 数据源扩展（支持 API + 本地 JSON 双模式）
-  - ✨ RiskManager 风控集成（止损止盈自动监控）
-  - ✨ 详细日志系统（[SIGNAL]、[ORDER]、[EXIT]、[RISK_MANAGER] 等）
-  - ✨ 多持仓并发监控（每个信号独立风控任务）
-  - ✨ 用户映射表扩展（从 4 人到 10 人）
+  - ✨ 代码架构清理（删除冗余代码，统一数据源管理）
+  - ✅ 删除 ProcessedIdStore 类（统一使用全局 processed_ids 管理）
+  - ✅ 删除同步 AI 调用（保持异步架构一致性）
+  - ✅ 删除占位实现和孤立代码（简化网络模块）
+  - ✅ 修复引用错误（call_ai_for_tweet_async 直接调用核心函数）
 
 ---
 
@@ -279,6 +279,112 @@ async def close_executor(qty: float, reason: str):
 
 ---
 
+### 6. ✅ 改进：`trading_bot/` 代码架构清理（v1.3.3）
+**删除冗余代码，统一架构，消除技术债务**
+
+#### 6.1 ✅ 统一 processed_ids 管理
+**改动前**：
+```python
+# app_runner.py - ProcessedIdStore 类（本地存储）
+class ProcessedIdStore:
+    def __init__(self, path: Path):
+        self.path = path
+        self._cache: Set[str] = set()
+    
+    def has(self, tweet_id: str) -> bool:
+        return tweet_id in self._cache
+    
+    def add_many(self, ids: List[str]) -> None:
+        # ... 实现 ...
+```
+
+**改动后**：
+```python
+# 删除 ProcessedIdStore 类，统一使用 twitter_source 全局函数
+from twitter_source import load_processed_ids, mark_as_processed
+
+# 使用全局函数替代
+if tweet_id in load_processed_ids():
+    continue
+```
+
+**收益**：
+- ✅ 单一数据源，消除不一致风险
+- ✅ 简化代码，减少约40行
+- ✅ 职责清晰：`twitter_source` 负责数据层
+
+#### 6.2 ✅ 删除同步AI调用遗留
+**改动前**：
+```python
+def _to_trade_signal(self, tweet: RawTweet, ai_result: Optional[Any]) -> Optional[TradeSignal]:
+    if ai_result is None:
+        # 尝试同步 AI 调用（阻塞风险）
+        try:
+            ai_result = call_ai_for_tweet(text=text, author=user_name, introduction="unknown author")
+        except Exception as e:
+            print(f"[_to_trade_signal] sync AI error: {e}")
+            return None
+```
+
+**改动后**：
+```python
+def _to_trade_signal(self, tweet: RawTweet, ai_result: Optional[Any]) -> Optional[TradeSignal]:
+    # ai_result 为 None 时直接返回 None（AI 分析在后台 worker 完成）
+    if ai_result is None:
+        return None
+```
+
+**收益**：
+- ✅ 遵循异步架构原则
+- ✅ 主循环不阻塞，保持 10 秒周期
+- ✅ 职责清晰：AI 分析只在后台 worker 中进行
+
+#### 6.3 ✅ 修复引用错误
+**改动前**：
+```python
+async def call_ai_for_tweet_async(...):
+    # 错误引用已删除的函数
+    result = await asyncio.wait_for(
+        loop.run_in_executor(None, call_ai_for_tweet, text, author, introduction),
+        timeout=timeout
+    )
+```
+
+**改动后**：
+```python
+async def call_ai_for_tweet_async(...):
+    # 直接调用核心 AI 函数
+    raw_result = await asyncio.wait_for(
+        loop.run_in_executor(None, ai_analyze_text, text, author, introduction),
+        timeout=timeout
+    )
+    
+    # 尝试解析 AI 返回的 JSON 结果
+    try:
+        import json
+        return json.loads(raw_result)
+    except json.JSONDecodeError:
+        return {"raw": raw_result}
+```
+
+**收益**：
+- ✅ 修复引用错误
+- ✅ 直接调用核心函数，减少中间层
+- ✅ 添加 JSON 解析容错处理
+
+#### 6.4 ✅ 删除占位实现和孤立代码
+- ✅ 删除 `network.py` 中的 `check_google_connectivity()` 占位实现
+- ✅ 删除 `app_runner.py` 中的 `_save_raw_batch()` 方法
+- ✅ 删除 `twitter_source.py` 末尾孤立代码行
+- ✅ 删除 `tweet_analyzer.py` 中的同步版本 `call_ai_for_tweet()`
+
+**收益**：
+- ✅ 消除功能重复
+- ✅ 简化网络模块逻辑
+- ✅ 减少维护成本
+
+---
+
 ## 环境 & 版本
 
 ### 依赖
@@ -348,7 +454,7 @@ python trading_bot/main.py
 
 ## 注意事项 & 限制
 
-### ⚠️ v1.0.0 已知限制
+### ⚠️ v1.3.3 已知限制
 
 1. **推特 API 骨架**
    - 当前 `fetch_latest_tweets_from_api()` 为骨架，自动降级到本地 JSON
@@ -357,7 +463,7 @@ python trading_bot/main.py
 
 2. **AI 分析延迟**
    - Poe API 响应时间约 2-5 秒，可能导致实际循环周期 > 10 秒
-   - ✨ 建议：异步化 AI 调用，不阻塞主循环（后续 v2.0 优化）
+   - ✅ 已异步化 AI 调用（v1.2.0），不阻塞主循环
 
 3. **风控监控粒度**
    - 当前风控检查间隔为 1 秒，可根据需要调整 `poll_interval_sec`
@@ -375,13 +481,27 @@ python trading_bot/main.py
 6. **用户映射表**
    - 当前硬编码 10 个人物，后续可读取 CSV/JSON 文件扩展
 
-### ✅ v1.0.0 新增特性
+7. **架构清理完成**
+   - ✅ 已删除冗余代码（ProcessedIdStore、同步AI调用、占位实现）
+   - ✅ 统一数据源管理（单一 processed_ids 全局函数）
+   - ✅ 修复引用错误（call_ai_for_tweet_async 直接调用核心函数）
 
-- ✅ 推特 API 数据源抽象层（支持 API + 本地 JSON 双模式）
-- ✅ RiskManager 完整集成（止损止盈自动监控）
-- ✅ 详细日志系统（[TWEET]、[AI]、[SIGNAL]、[ORDER]、[EXIT] 等）
-- ✅ 多持仓并发风控（每个信号创建独立 Position + 监控任务）
-- ✅ 扩展用户映射表（10 个影响力人物）
+### ✅ v1.3.3 新增特性
+
+- ✅ 代码架构清理（删除冗余代码，统一数据源管理）
+- ✅ 统一 processed_ids 管理（消除数据不一致风险）
+- ✅ 保持异步架构一致性（主循环不阻塞）
+- ✅ 简化网络模块（删除占位实现）
+- ✅ 修复引用错误（直接调用核心函数）
+- ✅ 减少维护成本（消除功能重复）
+
+### ✅ 历史版本特性
+
+- ✅ v1.0.0：推特 API 数据源抽象层、RiskManager 完整集成、详细日志系统
+- ✅ v1.2.0：异步化 AI 调用（后台队列 + 超时控制）
+- ✅ v1.3.0：推特 API 并发抓取 + processed_ids 缓存
+- ✅ v1.3.1：JSONL 日志 + 两套版本函数 + v1.4.0 框架设计
+- ✅ v1.3.2：清理旧代码架构（删除 `_load_twitter_fetch_func`）
 
 ---
 
@@ -390,9 +510,14 @@ python trading_bot/main.py
 | 版本 | 目标 | 优先级 |
 |------|------|--------|
 | **v0.2.0** | MVP：本地 JSON + AI 分析 + 下单基础链路 | ✅ 已完成 |
-| **v1.0.0 (当前)** | 风控集成 + API 骨架 + 详细日志 + 多持仓监控 | ✅ 已完成 |
+| **v1.0.0** | 风控集成 + API 骨架 + 详细日志 + 多持仓监控 | ✅ 已完成 |
 | **v1.1.0** | 补充真实 Twitter API 实现 | 高 |
-| **v1.2.0** | 异步化 AI 调用（后台队列 + 超时控制） | 中 |
+| **v1.2.0** | 异步化 AI 调用（后台队列 + 超时控制） | ✅ 已完成 |
+| **v1.3.0** | 推特 API 并发抓取 + processed_ids 缓存 | ✅ 已完成 |
+| **v1.3.1** | JSONL 日志 + 两套版本函数 + v1.4.0 框架设计 | ✅ 已完成 |
+| **v1.3.2** | 清理旧代码架构（删除 `_load_twitter_fetch_func`） | ✅ 已完成 |
+| **v1.3.3 (当前)** | 代码架构清理（删除冗余代码，统一数据源管理） | ✅ 已完成 |
+| **v1.4.0** | 动态触发框架（K线信号动态触发 + 10分钟窗口 + 5秒间隔） | 中 |
 | **v2.0.0** | 置信度过滤 + 持仓聚合 + 风险限额 + 多策略 | 低 |
 
 ---
@@ -427,6 +552,6 @@ print(f"[DEBUG] Final TradeSignal: {signal}")
 
 ---
 
-**最后修订**：2025-11-17 by AI Assistant  
-**项目负责人**：用户  
+**最后修订**：2025-11-17 by AI Assistant (v1.3.3 代码架构清理)
+**项目负责人**：用户
 **预期交付**：完成 MVP 实现，通过验证清单
