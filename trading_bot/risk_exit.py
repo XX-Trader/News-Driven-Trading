@@ -36,13 +36,27 @@ except ImportError:
 
 class ExitStrategy:
     """
-    出场策略接口。
-
-    实现类需要根据 Position / StrategyConfig / 最新价格等信息，产生 ExitDecision。
+    出场策略接口类 - 定义了所有出场策略必须遵循的规范
+    
+    功能说明：
+    - 这是一个抽象基类，定义了出场策略的标准接口
+    - 具体实现类（如BasicExitStrategy）必须实现on_price方法
+    - 负责根据实时价格、持仓信息和风控参数生成出场决策
+    
+    设计思想：
+    - 策略模式：将不同的出场逻辑封装在独立的策略类中
+    - 解耦：RiskManager只依赖接口，不依赖具体实现
+    - 可扩展：可以轻松添加新的出场策略（如追踪止损、技术指标出场等）
+    
+    参数：
+    - position: Position对象，包含持仓的所有信息（币种、方向、数量、成本价等）
+    - risk_conf: RiskConfig对象，包含全局风控参数（止损比例、止盈方案等）
     """
 
     def __init__(self, position: Position, risk_conf: RiskConfig) -> None:
+        # 保存持仓实例，后续计算盈亏和出场决策需要用到
         self.position = position
+        # 保存风控配置，包含止损止盈等参数
         self.risk_conf = risk_conf
 
     async def on_price(
@@ -50,11 +64,24 @@ class ExitStrategy:
         latest_price: float,
     ) -> Optional[ExitDecision]:
         """
-        根据最新价格决定是否需要出场。
-
-        返回：
-        - ExitDecision：需要出场（全部或部分）
-        - None：不需要操作
+        核心方法：根据最新价格判断是否需要出场
+        
+        执行逻辑：
+        1. 接收最新市场价格
+        2. 计算当前持仓的浮动盈亏
+        3. 根据风控规则判断是否需要出场
+        4. 返回出场决策或None（不出场）
+        
+        参数：
+        - latest_price: 当前最新价格（从交易所获取的实时价格）
+        
+        返回值：
+        - ExitDecision对象：表示需要执行出场操作（全部平仓或部分平仓）
+        - None：表示当前不需要任何操作，继续持有
+        
+        注意：
+        - 这是一个抽象方法，子类必须实现具体的出场逻辑
+        - 方法必须是异步的，因为可能涉及IO操作（如查询历史数据、计算指标等）
         """
         raise NotImplementedError
 

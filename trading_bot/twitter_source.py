@@ -364,6 +364,7 @@ async def fetch_latest_tweets() -> List[Dict[str, Any]]:
     """
     # 【初期开发推荐】使用本地版本测试
     return await fetch_latest_tweets_from_local_with_logging()
+    # return await fetch_latest_tweets_from_api_with_logging() 
 
 async def fetch_latest_tweets_from_api_with_logging() -> List[Dict[str, Any]]:
     """
@@ -390,7 +391,7 @@ async def fetch_latest_tweets_from_local_with_logging() -> List[Dict[str, Any]]:
     - 适合全流程功能验证
     """
     tweets = fetch_latest_tweets_from_local_json()
-    
+    print(f"[TWITTER_API] 获取 {len(tweets)} 条本地推文")
     # 记录到 JSONL
     for tweet in tweets:
         # 确保用户名是简单的字符串，避免包含完整用户对象

@@ -78,7 +78,8 @@ class AIConfig:
         "bvJrIZp3bug_ZHHvkBTQmN_HanLRg-J6yEpRwAocESw"  # 示例 Key
     )
     poe_base_url: str = "https://api.poe.com/v1"
-    poe_model: str = "gpt-5.1"
+    # poe_model: str = "gpt-5.1"
+    poe_model: str = "Kimi-K2-Thinking"
 
     # 预留多模型路由的配置（当前不使用）
     models: List[Dict[str, Any]] = field(default_factory=list)

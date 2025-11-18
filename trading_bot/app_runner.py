@@ -34,21 +34,22 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 try:
     from ai_base import AIInput, AIModelRouter
     from config import AppConfig, load_config
-    from domain import TradeSignal
+    from domain import TradeSignal, calculate_order_quantity_from_balance, StrategyConfig, merge_strategy_config, Position
     from exchange_binance_async import BinanceAsyncClient
     from signals import SignalSource, InMemorySignalSource
     from tweet_analyzer import call_ai_for_tweet_async, detect_trade_symbol
     from twitter_source import load_processed_ids, mark_as_processed, fetch_latest_tweets
+    from risk_exit import RiskManager
 
 except ImportError:
     from .ai_base import AIInput, AIModelRouter
     from .config import AppConfig, load_config
-    from .domain import TradeSignal
+    from .domain import TradeSignal, calculate_order_quantity_from_balance, StrategyConfig, merge_strategy_config, Position
     from .exchange_binance_async import BinanceAsyncClient
     from .signals import SignalSource, InMemorySignalSource
     from .tweet_analyzer import call_ai_for_tweet_async, detect_trade_symbol
     from .twitter_source import load_processed_ids, mark_as_processed, fetch_latest_tweets
-
+    from .risk_exit import RiskManager
 
 # ----------------------------
 # 类型别名与简单协议定义
@@ -99,7 +100,7 @@ class TwitterCrawlerSignalSource(SignalSource):
         # 异步 AI 队列与缓存
         self.ai_queue: asyncio.Queue = asyncio.Queue(maxsize=0)  # 无限制队列
         self.ai_results_cache: Dict[str, Any] = {}  # {tweet_id: ai_result}
-        self.tweet_status: Dict[str, Dict[str, Any]] = {}  # {tweet_id: {status, created_at, ...}}
+        self.tweet_status: Dict[str, Dict[str, Any]] = {}  # {tweet_id: {status, retry_count, created_at, ...}}
         
         # 后台 worker 任务
         self.worker_tasks: List[asyncio.Task] = []
@@ -129,6 +130,8 @@ class TwitterCrawlerSignalSource(SignalSource):
                     continue
                 
                 # 更新状态为处理中
+                if tweet_id not in self.tweet_status:
+                    self.tweet_status[tweet_id] = {"retry_count": 0}
                 self.tweet_status[tweet_id]["status"] = "processing"
                 
                 text = str(tweet.get("text") or "")
@@ -148,13 +151,19 @@ class TwitterCrawlerSignalSource(SignalSource):
                     )
                     self.ai_results_cache[tweet_id] = ai_result
                     self.tweet_status[tweet_id]["status"] = "done"
-                    print(f"[AI_WORKER] completed for tweet {tweet_id}")
+                    # 成功时重置重试计数
+                    self.tweet_status[tweet_id]["retry_count"] = 0
+                    print(f"[AI_WORKER] completed for tweet {tweet_id}, result: {ai_result}")
                 except asyncio.TimeoutError:
                     self.tweet_status[tweet_id]["status"] = "timeout"
-                    print(f"[AI_WORKER] timeout after 30s for tweet {tweet_id}")
+                    # 超时时增加重试计数
+                    self.tweet_status[tweet_id]["retry_count"] = self.tweet_status[tweet_id].get("retry_count", 0) + 1
+                    print(f"[AI_WORKER] timeout after 30s for tweet {tweet_id} (retry {self.tweet_status[tweet_id]['retry_count']}/3)")
                 except Exception as e:
                     self.tweet_status[tweet_id]["status"] = "error"
-                    print(f"[AI_WORKER] error for tweet {tweet_id}: {e}")
+                    # 异常时增加重试计数
+                    self.tweet_status[tweet_id]["retry_count"] = self.tweet_status[tweet_id].get("retry_count", 0) + 1
+                    print(f"[AI_WORKER] error for tweet {tweet_id}: {e} (retry {self.tweet_status[tweet_id]['retry_count']}/3)")
                     
             except Exception as e:
                 print(f"[AI_WORKER] unexpected error: {e}")
@@ -250,6 +259,14 @@ class TwitterCrawlerSignalSource(SignalSource):
                         skipped_count += 1
                         continue  # 已处理
                     
+                    # 检查重试次数，如果达到3次则跳过
+                    if tweet_id in self.tweet_status:
+                        retry_count = self.tweet_status[tweet_id].get("retry_count", 0)
+                        if retry_count >= 3:
+                            print(f"[AI_QUEUE] tweet {tweet_id} skipped (max retries 3 reached)")
+                            skipped_count += 1
+                            continue  # 已达到最大重试次数，不再处理
+                    
                     processed_count += 1
 
                     # 推文入队（非阻塞），立即返回
@@ -257,11 +274,20 @@ class TwitterCrawlerSignalSource(SignalSource):
                         "tweet": tweet,
                         "tweet_id": tweet_id,
                     })
-                    self.tweet_status[tweet_id] = {
-                        "status": "pending",
-                        "created_at": time.time(),
-                    }
-                    print(f"[AI_QUEUE] tweet {tweet_id} enqueued for AI analysis")
+                    
+                    # 初始化或更新推文状态
+                    if tweet_id not in self.tweet_status:
+                        self.tweet_status[tweet_id] = {
+                            "retry_count": 0,
+                            "status": "pending",
+                            "created_at": time.time(),
+                        }
+                        print(f"[AI_QUEUE] tweet {tweet_id} enqueued for AI analysis (retry 0/3)")
+                    else:
+                        # 更新状态为pending（重试）
+                        self.tweet_status[tweet_id]["status"] = "pending"
+                        retry_count = self.tweet_status[tweet_id].get("retry_count", 0)
+                        print(f"[AI_QUEUE] tweet {tweet_id} re-enqueued for AI analysis (retry {retry_count}/3)")
 
                     # 检查缓存中是否已有结果（AI worker 已完成）
                     if tweet_id in self.ai_results_cache:
@@ -412,9 +438,6 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
 
     注意：使用 async for 直接迭代 signal_source.stream()，不要对生成器使用 await
     """
-    from domain import calculate_order_quantity_from_balance, StrategyConfig, merge_strategy_config, Position
-    from risk_exit import RiskManager
-
     # 初始化风控管理器
     # 注：这里简化了 price_fetcher 和 close_executor，实际应从 exchange_client 抽离
     async def price_fetcher(symbol: str) -> float:
@@ -443,17 +466,17 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
         except Exception as e:
             print(f"[EXIT] error closing position: {e}")
             return None
-
+    print("[main] starting risk manager")
     risk_manager = RiskManager(
         risk_conf=app.config.risk,
         price_fetcher=price_fetcher,
         close_executor=close_executor,
         poll_interval_sec=1.0,
     )
-
+    print("[main] starting risk manager...")
     # 追踪所有活跃的风控监控任务
     monitor_tasks: Dict[str, asyncio.Task] = {}
-
+    
     async for signal in app.signal_source.stream():
         try:
             tweet_id = signal.meta.get("tweet_id", "unknown")
