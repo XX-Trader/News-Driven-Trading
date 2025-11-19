@@ -123,8 +123,8 @@ class TwitterCrawlerSignalSource(SignalSource):
             try:
                 # 从队列取推文数据
                 tweet_data = await self.ai_queue.get()
-                tweet = tweet_data.get("tweet")
-                tweet_id = tweet_data.get("tweet_id")
+                tweet = tweet_data
+                tweet_id = tweet_data.get("id")
                 
                 if not tweet_id:
                     continue
@@ -134,8 +134,8 @@ class TwitterCrawlerSignalSource(SignalSource):
                     self.tweet_status[tweet_id] = {"retry_count": 0}
                 self.tweet_status[tweet_id]["status"] = "processing"
                 
-                text = str(tweet.get("text") or "")
-                user_name = str(tweet.get("user_name") or tweet.get("screen_name") or "")
+                text = str(tweet)
+                user_name = str(tweet.get("author", {}).get("userName", None))
                 user_intro_mapping = getattr(
                     self.ai_router.config, "user_intro_mapping", {}
                 ) if hasattr(self.ai_router, "config") else {}

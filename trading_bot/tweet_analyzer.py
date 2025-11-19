@@ -160,9 +160,11 @@ async def call_ai_for_tweet_async(
         # 尝试解析 AI 返回的 JSON 结果
         try:
             import json
+            print("[AI_ASYNC] raw_result:", raw_result)
             return json.loads(raw_result)
         except json.JSONDecodeError:
             # 如果不是 JSON，返回原始字符串包装
+            print(f"不是 JSON，返回原始字符串包装")
             return {"raw": raw_result}
     except asyncio.TimeoutError:
         print(f"[AI_ASYNC] timeout after {timeout}s for tweet by {author}")
