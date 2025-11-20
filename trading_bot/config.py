@@ -75,7 +75,7 @@ class AIConfig:
     # ===== Poe(OpenAI 兼容)配置（当前直接硬编码，方便你本地快速联调。
     # 实盘前强烈建议改为从环境变量或独立配置文件加载）=====
     poe_api_key: str = (
-        "bvJrIZp3bug_ZHHvkBTQmN_HanLRg-J6yEpRwAocESw"  # 示例 Key
+        "OboBsTgiTVCQs15npJuWcIUVIoOW7Spz1XzyHOcc8Zk"  # 示例 Key
     )
     poe_base_url: str = "https://api.poe.com/v1"
     # poe_model: str = "gpt-5.1"
