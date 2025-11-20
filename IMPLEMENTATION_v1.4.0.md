@@ -7,7 +7,7 @@
 
 ### 1.1 数据处理问题
 - **现象**: 用户反馈代码可能将 JSON 数据误当作 TXT 处理，导致 AI 分析失败或结果不准确。
-- **原因**: `app_runner.py` 中的 `_ai_worker` 在提取推文内容时，可能直接将整个推文对象（字典）转换为字符串，而不是提取关键的 `text` 字段。此外，`author` 字段如果是字典，直接转换也会导致信息丢失。
+- **原因**: `app_runner.py` 中的 `_ai_worker` 在提取推文内容时，可能直接将整个推文对象（字典）转换为字符串，而不是提取关键的 `text` 字段。此外，`author` 字段如果是字典，直接转换也会导致信息丢失。id是可以用的，内容txt是 tweets[0]到tweets[-1]，Id 是 tweets[0]['id'], author = tweets[0]['author']['userName']  （一切以这个为准这个是我手动修改的）
 - **证据**: 代码中存在 `text = str(tweet)` 和 `user_name = str(tweet.get("author", {}))` 的写法。
 
 ### 1.2 去重逻辑不完善
@@ -37,7 +37,7 @@ self.tweet_status[tweet_id] = {
 ```
 
 #### B. 增强 `_ai_worker`
-- **数据提取**: 健壮地从队列数据中提取 `tweet` 对象和 `tweet_id`。
+- **数据提取**: 健壮地从队列数据中提取 `tweet` 对象和 `id`。
 - **字段解析**: 
     - 正确提取 `text`：`tweet.get("text", "")`。
     - 正确提取 `author`：处理 `author` 为字典的情况，提取 `userName` 或 `name`。
@@ -60,7 +60,7 @@ self.tweet_status[tweet_id] = {
 - **最终清理**: 对于超过 30 分钟的旧任务，从内存中彻底清除。
 
 ### 2.2 验证数据源 (`trading_bot/twitter_source.py`)
-- 确认 `fetch_latest_tweets` 返回的是解析后的字典列表，而非原始 JSON 字符串。根据代码审查，目前使用的是 `json.load`，返回结构正确。
+- 确认 `fetch_latest_tweets` 返回的是解析后的字典列表，而非原始 JSON 字符串。根据代码审查，目前使用的是 `json.load`，返回结构正确，内容是tweets[0]到之后，一共20条数据，当然你也要根据长度去读取。
 
 ## 3. 修改计划
 
