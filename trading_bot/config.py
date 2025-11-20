@@ -81,6 +81,13 @@ class AIConfig:
     # poe_model: str = "gpt-5.1"
     poe_model: str = "Kimi-K2-Thinking"
 
+    # AI代理配置（MVP新增）
+    use_proxy: bool = False  # 是否启用代理（默认真盘直连，调试可改为True）
+    proxy_config: Dict[str, str] = field(default_factory=lambda: {
+        "http": "http://localhost:1080",
+        "https": "http://localhost:1080"
+    })  # 代理URL配置（仅当use_proxy=True时生效）
+
     # 预留多模型路由的配置（当前不使用）
     models: List[Dict[str, Any]] = field(default_factory=list)
 

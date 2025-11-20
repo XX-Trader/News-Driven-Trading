@@ -1,14 +1,14 @@
 # News-Driven-Trading 完整实现文档
 
 ## 版本信息
-- **版本号**：v1.3.3
-- **日期**：2025-11-17 北京时间
+- **版本号**：v1.3.4
+- **日期**：2025-11-19 北京时间
 - **更新内容**：
-  - ✨ 代码架构清理（删除冗余代码，统一数据源管理）
-  - ✅ 删除 ProcessedIdStore 类（统一使用全局 processed_ids 管理）
-  - ✅ 删除同步 AI 调用（保持异步架构一致性）
-  - ✅ 删除占位实现和孤立代码（简化网络模块）
-  - ✅ 修复引用错误（call_ai_for_tweet_async 直接调用核心函数）
+  - ✨ 新增 AI 代理配置支持（智能网络检测 + 自动切换）
+  - ✅ 在 config.py 的 AIConfig 中补充代理配置字段（use_proxy, proxy_config）
+  - ✅ 修改 trading_bot/tweet_analyzer.py 使用 config.ai 的配置
+  - ✅ 实现完整的代理逻辑（httpx + 环境变量回退）
+  - ✅ 网络连通性缓存（首次检测后复用结果，避免重复检测）
 
 ---
 
@@ -68,17 +68,34 @@ async def fetch_latest_tweets_from_custom_source():
 
 ### AI 分析函数签名
 ```python
-def call_ai_for_tweet(text: str, author: str, introduction: str) -> Dict[str, Any]:
+def ai_analyze_text(text: str, author: str, introduction: str) -> str:
     """
-    从 notebook 迁移的函数。
-    返回格式（由 Poe API 决定，遵循提示词 提示词.txt）：
-    {
-        "交易币种": "BTC" | ["BTC", "ETH"],
-        "交易方向": "做多" | "做空",
-        "消息置信度": 0-100 (百分比数字),
-        ...其他字段
-    }
+    从 notebook 迁移的核心 AI 分析函数（v1.3.4 更新：支持代理配置）。
+    
+    代理逻辑：
+    - 首次调用时检测能否直连 Google，缓存结果
+    - 能直连：不使用代理，直接调用 Poe API
+    - 不能直连：自动使用配置的代理（httpx → 环境变量回退）
+    
+    返回：AI 返回的原始字符串（通常为 JSON 格式，由 提示词.txt 决定）
     """
+```
+
+**代理配置支持（v1.3.4 新增）**：
+```python
+# config.py 中的 AIConfig
+@dataclass
+class AIConfig:
+    poe_api_key: str = "your-poe-api-key"
+    poe_base_url: str = "https://api.poe.com/v1"
+    poe_model: str = "gpt-4o-mini"
+    
+    # 新增代理配置
+    use_proxy: bool = False  # 是否启用代理
+    proxy_config: Dict[str, str] = field(default_factory=lambda: {
+        "http": "http://localhost:1080",
+        "https": "http://localhost:1080"
+    })
 ```
 
 ### 下单流程
@@ -392,7 +409,7 @@ async def call_ai_for_tweet_async(...):
 - `aiohttp` (异步 HTTP 客户端)
 - `requests` (同步 HTTP，用于 Binance K 线)
 - `openai` (Poe API 兼容的 OpenAI 客户端)
-- `httpx` (可选，用于代理支持)
+- `httpx` (v1.3.4 新增，用于代理支持，httpx.Client 优先，失败时回退到环境变量)
 
 ### API Key 配置
 所有 API Key 已存储在 `config.py` 中：
@@ -454,7 +471,15 @@ python trading_bot/main.py
 
 ## 注意事项 & 限制
 
-### ⚠️ v1.3.3 已知限制
+### ⚠️ v1.3.4 新增注意事项
+
+1. **代理配置**
+   - 默认代理地址：`http://localhost:1080`，可在 `config.ai.proxy_config` 中修改
+   - 代理决策逻辑：首次调用时测试 Google 连通性（3秒超时），缓存结果供后续复用
+   - 回退机制：httpx 失败时自动使用 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量
+   - 性能优化：网络检测结果缓存，避免每次调用重复检测
+
+### ⚠️ v1.3.3 已知限制（历史）
 
 1. **推特 API 骨架**
    - 当前 `fetch_latest_tweets_from_api()` 为骨架，自动降级到本地 JSON
@@ -486,7 +511,14 @@ python trading_bot/main.py
    - ✅ 统一数据源管理（单一 processed_ids 全局函数）
    - ✅ 修复引用错误（call_ai_for_tweet_async 直接调用核心函数）
 
-### ✅ v1.3.3 新增特性
+### ✅ v1.3.4 新增特性
+
+- ✅ AI 代理配置支持（智能网络检测 + 自动切换）
+- ✅ 在 config.py 的 AIConfig 中补充代理配置字段（use_proxy, proxy_config）
+- ✅ 网络连通性缓存（首次检测后复用结果，避免重复检测）
+- ✅ httpx.Client 优先，失败时回退到环境变量
+
+### ✅ 历史版本特性
 
 - ✅ 代码架构清理（删除冗余代码，统一数据源管理）
 - ✅ 统一 processed_ids 管理（消除数据不一致风险）
@@ -502,6 +534,7 @@ python trading_bot/main.py
 - ✅ v1.3.0：推特 API 并发抓取 + processed_ids 缓存
 - ✅ v1.3.1：JSONL 日志 + 两套版本函数 + v1.4.0 框架设计
 - ✅ v1.3.2：清理旧代码架构（删除 `_load_twitter_fetch_func`）
+- ✅ v1.3.3：代码架构清理（删除冗余代码，统一数据源管理）
 
 ---
 
@@ -516,7 +549,8 @@ python trading_bot/main.py
 | **v1.3.0** | 推特 API 并发抓取 + processed_ids 缓存 | ✅ 已完成 |
 | **v1.3.1** | JSONL 日志 + 两套版本函数 + v1.4.0 框架设计 | ✅ 已完成 |
 | **v1.3.2** | 清理旧代码架构（删除 `_load_twitter_fetch_func`） | ✅ 已完成 |
-| **v1.3.3 (当前)** | 代码架构清理（删除冗余代码，统一数据源管理） | ✅ 已完成 |
+| **v1.3.3** | 代码架构清理（删除冗余代码，统一数据源管理） | ✅ 已完成 |
+| **v1.3.4 (当前)** | AI 代理配置支持（智能网络检测 + 自动切换） | ✅ 已完成 |
 | **v1.4.0** | 动态触发框架（K线信号动态触发 + 10分钟窗口 + 5秒间隔） | 中 |
 | **v2.0.0** | 置信度过滤 + 持仓聚合 + 风险限额 + 多策略 | 低 |
 
@@ -552,6 +586,6 @@ print(f"[DEBUG] Final TradeSignal: {signal}")
 
 ---
 
-**最后修订**：2025-11-17 by AI Assistant (v1.3.3 代码架构清理)
+**最后修订**：2025-11-19 by AI Assistant (v1.3.4 AI 代理配置支持)
 **项目负责人**：用户
 **预期交付**：完成 MVP 实现，通过验证清单

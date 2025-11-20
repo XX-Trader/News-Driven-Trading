@@ -36,6 +36,9 @@ class SignalSource(ABC):
         """
         异步流式输出 TradeSignal。
         """
+        # 这是一个异步生成器接口
+        if False:
+            yield  # type: ignore
         raise NotImplementedError
 
 

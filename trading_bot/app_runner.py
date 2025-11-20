@@ -135,14 +135,18 @@ class TwitterCrawlerSignalSource(SignalSource):
                 self.tweet_status[tweet_id]["status"] = "processing"
                 
                 text = str(tweet)
-                user_name = str(tweet.get("author", {}).get("userName", None))
+                user_name = str(tweet.get("author", {}))
                 user_intro_mapping = getattr(
                     self.ai_router.config, "user_intro_mapping", {}
                 ) if hasattr(self.ai_router, "config") else {}
                 introduction = user_intro_mapping.get(user_name, "unknown author")
-                
+                print(f"[AI_WORKER] processing tweet {tweet_id}")
+                print(f"[AI_WORKER] user: {user_name}")
+                print(f"[AI_WORKER] user_intro: {introduction}")
+                print(f"[AI_WORKER] tweet: {text}")
                 try:
                     # 异步调用 AI，30 秒超时
+                    print("[AI_WORKER] calling AI for tweet {tweet_id}")
                     ai_result = await call_ai_for_tweet_async(
                         text=text,
                         author=user_name,
@@ -248,9 +252,10 @@ class TwitterCrawlerSignalSource(SignalSource):
                 
                 processed_count = 0
                 skipped_count = 0
-                
+                print(f"[DEBUG] Processing {len(raw_tweets)} tweets...")
                 for tweet in raw_tweets:
-                    tweet_id = str(tweet.get("id") or tweet.get("tweet_id") or "")
+                    tweet_id = str(tweet.get("id"))
+                    print(f"[DEBUG] Processing tweet {tweet_id}...")
                     if not tweet_id:
                         continue
                     
@@ -259,24 +264,12 @@ class TwitterCrawlerSignalSource(SignalSource):
                         skipped_count += 1
                         continue  # 已处理
                     
-                    # 检查重试次数，如果达到3次则跳过
-                    if tweet_id in self.tweet_status:
-                        retry_count = self.tweet_status[tweet_id].get("retry_count", 0)
-                        if retry_count >= 3:
-                            print(f"[AI_QUEUE] tweet {tweet_id} skipped (max retries 3 reached)")
-                            skipped_count += 1
-                            continue  # 已达到最大重试次数，不再处理
+                    # 检查当前状态，避免重复入队
+                    should_enqueue = False
                     
-                    processed_count += 1
-
-                    # 推文入队（非阻塞），立即返回
-                    await self.ai_queue.put({
-                        "tweet": tweet,
-                        "tweet_id": tweet_id,
-                    })
-                    
-                    # 初始化或更新推文状态
                     if tweet_id not in self.tweet_status:
+                        # 新推文：直接入队
+                        should_enqueue = True
                         self.tweet_status[tweet_id] = {
                             "retry_count": 0,
                             "status": "pending",
@@ -284,10 +277,33 @@ class TwitterCrawlerSignalSource(SignalSource):
                         }
                         print(f"[AI_QUEUE] tweet {tweet_id} enqueued for AI analysis (retry 0/3)")
                     else:
-                        # 更新状态为pending（重试）
-                        self.tweet_status[tweet_id]["status"] = "pending"
+                        # 已有状态记录，检查是否需要重试
+                        current_status = self.tweet_status[tweet_id].get("status")
                         retry_count = self.tweet_status[tweet_id].get("retry_count", 0)
-                        print(f"[AI_QUEUE] tweet {tweet_id} re-enqueued for AI analysis (retry {retry_count}/3)")
+                        
+                        if current_status in ("processing", "pending", "done"):
+                            # 正在处理、排队中或已完成：跳过，等待结果或 Worker 完成
+                            continue
+                        
+                        elif current_status in ("timeout", "error"):
+                            # 失败或超时：检查重试次数
+                            if retry_count >= 3:
+                                print(f"[AI_QUEUE] tweet {tweet_id} skipped (max retries 3 reached)")
+                                skipped_count += 1
+                                continue
+                            else:
+                                # 需要重试
+                                should_enqueue = True
+                                self.tweet_status[tweet_id]["status"] = "pending"
+                                print(f"[AI_QUEUE] tweet {tweet_id} re-enqueued for AI analysis (retry {retry_count}/3)")
+                    
+                    if should_enqueue:
+                        processed_count += 1
+                        # 推文入队（非阻塞），立即返回
+                        await self.ai_queue.put({
+                            "tweet": tweet,
+                            "tweet_id": tweet_id,
+                        })
 
                     # 检查缓存中是否已有结果（AI worker 已完成）
                     if tweet_id in self.ai_results_cache:

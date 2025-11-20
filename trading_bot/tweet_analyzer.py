@@ -27,6 +27,29 @@ try:
 except ImportError:
     from .config import load_config
 
+# 模块级变量：缓存网络检测结果（None=未检测，True=能直连，False=需代理）
+_network_check_result = None
+
+def _check_network_once() -> bool:
+    """
+    只检查一次网络连通性，缓存结果供后续调用使用。
+    
+    返回：
+    - True: 能直连 Google/外网
+    - False: 不能直连，需要使用代理
+    """
+    global _network_check_result
+    if _network_check_result is None:
+        # 首次检测
+        import requests
+        try:
+            # 测试能否直连外网
+            test_response = requests.get("https://www.google.com", timeout=3)
+            _network_check_result = test_response.status_code == 200
+        except Exception:
+            _network_check_result = False
+    return _network_check_result
+
 
 def read_text(path: str) -> str:
     """读取文本文件，返回内容。"""
@@ -58,16 +81,41 @@ def ai_analyze_text(text: str, author: str, introduction: str) -> str:
     prompt = prompt.replace('{text1}', text)
     prompt = prompt.replace('{text2}', author)
     prompt = prompt.replace('{text3}', introduction)
+    print('prompt', prompt)
     
     try:
         import openai
         
-        # 根据代理配置选择连接方式
-        proxy_config = config.proxy
-        client = openai.OpenAI(
-            api_key=config.ai.poe_api_key,
-            base_url=config.ai.poe_base_url
-        )
+        # 使用缓存的网络检测结果决定是否需要代理
+        google_reachable = _check_network_once()
+        
+        # 如果能直连，不使用代理；如果不能直连，使用代理
+        if google_reachable:
+            # 能直连外网，不使用代理
+            client = openai.OpenAI(
+                api_key=config.ai.poe_api_key,
+                base_url=config.ai.poe_base_url
+            )
+        else:
+            # 不能直连外网，使用代理
+            try:
+                from httpx import Client as _HttpxClient
+                # httpx 的 proxy 参数需要字符串 URL
+                proxy_url = config.ai.proxy_config.get("https") or config.ai.proxy_config.get("http", "")
+                http_client = _HttpxClient(proxy=proxy_url, timeout=30.0)
+                client = openai.OpenAI(
+                    api_key=config.ai.poe_api_key,
+                    base_url=config.ai.poe_base_url,
+                    http_client=http_client
+                )
+            except Exception:
+                import os as _os
+                _os.environ["HTTP_PROXY"] = config.ai.proxy_config.get("http", "")
+                _os.environ["HTTPS_PROXY"] = config.ai.proxy_config.get("https", "")
+                client = openai.OpenAI(
+                    api_key=config.ai.poe_api_key,
+                    base_url=config.ai.poe_base_url
+                )
         
         chat = client.chat.completions.create(
             model=config.ai.poe_model,
@@ -90,8 +138,6 @@ def ai_analyze_text(text: str, author: str, introduction: str) -> str:
     
     except Exception as e:
         return f"(AI 错误：{e})"
-
-
 
 
 def normalize_symbol_from_ai(ai_res: Dict[str, Any]) -> Optional[str]:
