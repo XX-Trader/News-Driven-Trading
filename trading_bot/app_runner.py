@@ -5,7 +5,7 @@ trading_bot.app_runner
 
 - 定时从"推特抢跑"侧的爬虫接口获取最新消息（20 条左右）；
 - 将原始消息保存为 JSON 文件；
-- 用最简单的"已处理 id 列表"避免重复处理（本地 JSON 文件存储 processed_ids）；
+- 使用 TweetRecordManager 进行推文记录管理和去重判断（内存+文件双存储）；
 - 对未处理的消息可以接 AI 层（当前用 Dummy，它只是打个标签，不做强过滤）；
 - 每条未处理消息都转成 TradeSignal，并立刻实盘/模拟下单；
 - RiskManager 目前暂时不用（简化为单次下单），后续可一行行接入。
@@ -29,7 +29,7 @@ from typing import Any
 import asyncio
 import importlib
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, cast
 
 try:
     from ai_base import AIInput, AIModelRouter
@@ -38,8 +38,9 @@ try:
     from exchange_binance_async import BinanceAsyncClient
     from signals import SignalSource, InMemorySignalSource
     from tweet_analyzer import call_ai_for_tweet_async, detect_trade_symbol
-    from twitter_source import load_processed_ids, mark_as_processed, fetch_latest_tweets
+    from twitter_source import fetch_latest_tweets, _append_tweet_to_jsonl
     from risk_exit import RiskManager
+    from tweet_record_manager import TweetRecordManager, TweetProcessingRecord, get_tweet_preview, format_time_simple
 
 except ImportError:
     from .ai_base import AIInput, AIModelRouter
@@ -48,8 +49,9 @@ except ImportError:
     from .exchange_binance_async import BinanceAsyncClient
     from .signals import SignalSource, InMemorySignalSource
     from .tweet_analyzer import call_ai_for_tweet_async, detect_trade_symbol
-    from .twitter_source import load_processed_ids, mark_as_processed, fetch_latest_tweets
+    from .twitter_source import fetch_latest_tweets, _append_tweet_to_jsonl
     from .risk_exit import RiskManager
+    from .tweet_record_manager import TweetRecordManager, TweetProcessingRecord, get_tweet_preview, format_time_simple
 
 # ----------------------------
 # 类型别名与简单协议定义
@@ -70,8 +72,9 @@ class TweetSignalSourceConfig:
     - max_tweets_per_loop: 每次循环最多处理的推文数（用于调试），-1 表示不限制
     """
 
-    poll_interval_sec: int = 10
-    max_tweets_per_loop: int = -1  # -1 表示不限制，调试时可设为 3-5
+    poll_interval_sec: int = 10  # 修复：与文档描述一致，默认10秒
+    max_tweets_per_loop: int = 1  # -1 表示不限制，调试时可设为 3-5
+    max_tweets_analyse: int = 1  # 同时运行的 ai处理的推文条数
 
 
 # ----------------------------
@@ -98,6 +101,9 @@ class TwitterCrawlerSignalSource(SignalSource):
         self.fetch_func = fetch_func
         self.tweet_conf = tweet_conf
         self.ai_router = ai_router
+        
+        # 推文记录管理器（v2.0.0 新增）
+        self.record_manager = TweetRecordManager()
         
         # 异步 AI 队列与缓存
         self.ai_queue: asyncio.Queue = asyncio.Queue(maxsize=0)  # 无限制队列
@@ -186,18 +192,55 @@ class TwitterCrawlerSignalSource(SignalSource):
                     # 成功时重置重试计数
                     self.tweet_status[tweet_id]["retry_count"] = 0
                     print(f"[AI_WORKER] completed for tweet {tweet_id}, result: {ai_result}")
+                    
+                    # 更新推文记录（AI成功）
+                    self.record_manager.update_ai_result(
+                        tweet_id=tweet_id,
+                        success=True,
+                        parsed_result=ai_result
+                    )
+                    # 实时持久化
+                    self.record_manager.save_to_file()
+                    
                 except asyncio.TimeoutError:
+                    retry_count = self.tweet_status[tweet_id].get("retry_count", 0) + 1
                     self.tweet_status[tweet_id]["status"] = "timeout"
                     self.tweet_status[tweet_id]["last_update"] = time.time()
-                    # 超时时增加重试计数
-                    self.tweet_status[tweet_id]["retry_count"] = self.tweet_status[tweet_id].get("retry_count", 0) + 1
-                    print(f"[AI_WORKER] timeout after 30s for tweet {tweet_id} (retry {self.tweet_status[tweet_id]['retry_count']}/3)")
+                    self.tweet_status[tweet_id]["retry_count"] = retry_count
+                    print(f"[AI_WORKER] timeout after 30s for tweet {tweet_id} (retry {retry_count}/3)")
+                    
+                    # 更新推文记录（AI超时）
+                    self.record_manager.update_ai_result(
+                        tweet_id=tweet_id,
+                        success=False,
+                        error=f"timeout after 30s (retry {retry_count}/3)"
+                    )
+                    self.record_manager.update_retry_count(tweet_id, retry_count)
+                    
+                    # 如果重试3次，标记为已处理并持久化
+                    if retry_count >= 3:
+                        print(f"[AI_WORKER] max retries reached for tweet {tweet_id}, marking as processed")
+                        self.record_manager.save_to_file()
+                    
                 except Exception as e:
+                    retry_count = self.tweet_status[tweet_id].get("retry_count", 0) + 1
                     self.tweet_status[tweet_id]["status"] = "error"
                     self.tweet_status[tweet_id]["last_update"] = time.time()
-                    # 异常时增加重试计数
-                    self.tweet_status[tweet_id]["retry_count"] = self.tweet_status[tweet_id].get("retry_count", 0) + 1
-                    print(f"[AI_WORKER] error for tweet {tweet_id}: {e} (retry {self.tweet_status[tweet_id]['retry_count']}/3)")
+                    self.tweet_status[tweet_id]["retry_count"] = retry_count
+                    print(f"[AI_WORKER] error for tweet {tweet_id}: {e} (retry {retry_count}/3)")
+                    
+                    # 更新推文记录（AI异常）
+                    self.record_manager.update_ai_result(
+                        tweet_id=tweet_id,
+                        success=False,
+                        error=str(e)
+                    )
+                    self.record_manager.update_retry_count(tweet_id, retry_count)
+                    
+                    # 如果重试3次，标记为已处理并持久化
+                    if retry_count >= 3:
+                        print(f"[AI_WORKER] max retries reached for tweet {tweet_id}, marking as processed")
+                        self.record_manager.save_to_file()
                     
             except Exception as e:
                 print(f"[AI_WORKER] unexpected error: {e}")
@@ -259,7 +302,7 @@ class TwitterCrawlerSignalSource(SignalSource):
         print("[DEBUG] stream() starting...")
         
         # 启动 3 个后台 worker 任务
-        for i in range(3):
+        for i in range(self.tweet_conf.max_tweets_analyse):
             worker_task = asyncio.create_task(self._ai_worker())
             self.worker_tasks.append(worker_task)
             print(f"[AI_QUEUE] worker {i+1} started")
@@ -273,7 +316,7 @@ class TwitterCrawlerSignalSource(SignalSource):
         try:
             while True:
                 loop_count += 1
-                print(f"[DEBUG] === Loop #{loop_count} start ===")
+                # print(f"[DEBUG] === Loop #{loop_count} start ===")
                 
                 try:
                     # print(f"[DEBUG] Calling fetch_func()...")
@@ -297,16 +340,13 @@ class TwitterCrawlerSignalSource(SignalSource):
                 processed_count = 0
                 skipped_count = 0
                 
-                # 加载历史已处理 ID
-                history_processed_ids = load_processed_ids()
-                
                 for tweet in raw_tweets:
                     tweet_id = str(tweet.get("id"))
                     if not tweet_id:
                         continue
                     
-                    # 1. 历史去重：检查 processed_ids.json
-                    if tweet_id in history_processed_ids:
+                    # 1. 历史去重：检查 tweet_records.json（内存快速判断）
+                    if self.record_manager.is_processed(tweet_id):
                         skipped_count += 1
                         continue
                     
@@ -349,6 +389,30 @@ class TwitterCrawlerSignalSource(SignalSource):
                     
                     if should_enqueue:
                         processed_count += 1
+                        
+                        # 创建推文记录（v2.0.0 新增）
+                        # 提取推文信息
+                        text = str(tweet.get("text", "")).strip()
+                        author_obj = tweet.get("author")
+                        username = "unknown"
+                        if isinstance(author_obj, dict):
+                            username = str(author_obj.get("userName") or author_obj.get("name") or "unknown")
+                        elif author_obj:
+                            username = str(author_obj)
+                        
+                        # 创建记录
+                        record = TweetProcessingRecord(
+                            tweet_id=tweet_id,
+                            username=username,
+                            tweet_time=format_time_simple(),
+                            tweet_preview=get_tweet_preview(text),
+                            ai_success=False,  # 初始为 False，AI处理后再更新
+                        )
+                        self.record_manager.add_record(record)
+                        
+                        # 存储到 JSONL（原始数据归档）
+                        _append_tweet_to_jsonl(username, tweet)
+                        
                         # 推文入队（非阻塞）
                         await self.ai_queue.put({
                             "tweet": tweet,
@@ -361,8 +425,8 @@ class TwitterCrawlerSignalSource(SignalSource):
                         print(f"[DEBUG] AI result for tweet {tweet_id}: {ai_result}")
                         signal = self._to_trade_signal(tweet, ai_result)
                         if signal is not None:
-                            # 标记为已处理（仅当生成有效 signal 时）
-                            mark_as_processed([tweet_id])
+                            # AI处理成功，实时持久化记录
+                            self.record_manager.save_to_file()
                             yield signal
 
                 print(f"[DEBUG] Loop #{loop_count} finished: processed {processed_count} new tweets, skipped {skipped_count} already processed")
@@ -466,7 +530,7 @@ async def build_trading_app_context() -> TradingAppContext:
     exchange_client = BinanceAsyncClient(config=config)
 
     # 创建推特信号源配置（仅轮询间隔）
-    tweet_conf = TweetSignalSourceConfig(poll_interval_sec=10)
+    tweet_conf = TweetSignalSourceConfig()
 
     # 从 twitter_source 导入数据获取函数（支持版本切换）
     # 默认调用 fetch_latest_tweets()，内部可使用：
@@ -540,9 +604,21 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
         poll_interval_sec=1.0,
     )
     print("[main] starting risk manager...")
-    # 追踪所有活跃的风控监控任务
+    # 追踪所有活跃的风控监控任务（修复：内存泄漏 - 持仓完成后未清理任务）
     monitor_tasks: Dict[str, asyncio.Task] = {}
     
+    # 清理已完成任务的辅助函数
+    async def cleanup_completed_monitor_tasks():
+        """清理已完成的监控任务，防止内存泄漏"""
+        completed_ids = []
+        for position_id, task in monitor_tasks.items():
+            if task.done():
+                completed_ids.append(position_id)
+        
+        for position_id in completed_ids:
+            monitor_tasks.pop(position_id, None)
+            print(f"[RISK_MANAGER] cleaned up completed monitor task for position {position_id}")
+
     async for signal in app.signal_source.stream():
         try:
             tweet_id = signal.meta.get("tweet_id", "unknown")
@@ -561,9 +637,9 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
             balance = await app.exchange_client.get_balance(asset=quote_asset)
             price = await app.exchange_client.get_latest_price(symbol=signal.symbol)
 
-            # 简单的交易规格参数
-            min_qty = 0.001
-            step_size = 0.0001
+            # 使用配置中的交易规格参数（修复：移除硬编码）
+            min_qty = app.config.exchange.min_qty
+            step_size = app.config.exchange.step_size
 
             # 计算下单数量
             quantity = calculate_order_quantity_from_balance(
@@ -597,9 +673,24 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
             # [ORDER] 日志 - 下单后
             print(f"[ORDER] response: {order_resp}")
             
-            # 标记推文为已处理（下单成功后）
-            mark_as_processed([tweet_id])
-            print(f"[TWITTER_API] marked tweet {tweet_id} as processed")
+            # 更新推文记录的交易信息（下单成功后）
+            # 类型转换：我们知道在这个应用中 signal_source 一定是 TwitterCrawlerSignalSource
+            from .app_runner import TwitterCrawlerSignalSource
+            signal_source = cast(TwitterCrawlerSignalSource, app.signal_source)
+            
+            if signal_source.record_manager.get_record(tweet_id):
+                signal_source.record_manager.update_trade_info(
+                    tweet_id=tweet_id,
+                    trade_info={
+                        "order_resp": order_resp,
+                        "symbol": signal.symbol,
+                        "side": signal.side,
+                        "quantity": quantity,
+                        "price": price,
+                    }
+                )
+                signal_source.record_manager.save_to_file()
+            print(f"[TWITTER_API] updated trade info for tweet {tweet_id}")
 
             # 创建 Position 对象并注册风控监控
             position = Position(
@@ -616,12 +707,21 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
             monitor_tasks[position_id] = monitor_task
 
             print(f"[RISK_MANAGER] registered position {position_id}, monitoring started")
+            
+            # 每处理5个信号后，清理已完成的任务
+            if len(monitor_tasks) % 5 == 0:
+                await cleanup_completed_monitor_tasks()
 
         except Exception as e:
             import traceback
             print(f"[SIGNAL] error processing signal: {e}")
             print(f"[SIGNAL] traceback:\n{traceback.format_exc()}")
             continue
+        
+        finally:
+            # 定期清理已完成的任务（每处理一个信号后检查）
+            if len(monitor_tasks) > 10:
+                await cleanup_completed_monitor_tasks()
 
 
 async def start_trading_app() -> None:

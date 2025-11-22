@@ -179,10 +179,21 @@ async def create_network_context(config: AppConfig) -> NetworkContext:
     
     # 创建 session（根据是否需要代理配置连接器）
     if proxy_url:
-        # 使用代理时需要禁用 SSL 验证（某些代理需要）
-        connector = aiohttp.TCPConnector(ssl=False)
+        # 修复：默认启用 SSL 验证，仅对特定测试代理允许禁用
+        # 检查是否是本地测试代理（127.0.0.1 或 localhost）
+        is_local_proxy = "127.0.0.1" in proxy_url or "localhost" in proxy_url
+        
+        if is_local_proxy:
+            # 本地测试代理可以禁用 SSL（开发环境）
+            print(f"[NETWORK] Using local proxy {proxy_url}, SSL verification disabled")
+            connector = aiohttp.TCPConnector(ssl=False)
+        else:
+            # 远程代理必须启用 SSL（生产环境安全）
+            print(f"[NETWORK] Using remote proxy {proxy_url}, SSL verification enabled")
+            connector = aiohttp.TCPConnector(ssl=True)
         session = aiohttp.ClientSession(timeout=timeout, connector=connector)
     else:
+        # 直连模式，启用 SSL
         session = aiohttp.ClientSession(timeout=timeout)
     
     return NetworkContext(

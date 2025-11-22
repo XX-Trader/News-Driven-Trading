@@ -46,6 +46,40 @@ except ImportError:
 BINANCE_TIMESTAMP_MARGIN_MS = 1000  # 本地时间与服务器时间的安全边际
 
 
+def format_quantity_for_binance(quantity: float, step_size: float = 0.001) -> str:
+    """
+    将数量格式化为符合 Binance API 要求的字符串格式。
+    
+    Binance 要求：
+    - 数量必须符合 step_size 的精度
+    - 必须格式化为字符串，避免浮点数精度问题
+    
+    参数：
+    - quantity: 原始数量
+    - step_size: 最小变动单位（默认 0.001）
+    
+    返回：
+    - 格式化后的数量字符串
+    """
+    if step_size <= 0:
+        # 如果 step_size 无效，使用默认精度 8 位小数
+        return f"{quantity:.8f}".rstrip('0').rstrip('.')
+    
+    # 计算需要保留的小数位数
+    # 例如：step_size=0.001 -> 3位小数，step_size=0.01 -> 2位小数
+    decimal_places = 0
+    temp = step_size
+    while temp < 1:
+        temp *= 10
+        decimal_places += 1
+    
+    # 格式化数量
+    formatted = f"{quantity:.{decimal_places}f}"
+    
+    # 移除末尾的0和小数点
+    return formatted.rstrip('0').rstrip('.')
+
+
 class BinanceAsyncClient:
     """
     Binance 异步 REST/Futures 客户端（简化版）。
@@ -368,12 +402,15 @@ class BinanceAsyncClient:
         # 2. 设置杠杆（如果需要，可在外部控制只设置一次，这里为了简单每次下单前都调用）
         await self.change_leverage(symbol=symbol, leverage=leverage)
 
-        # 3. 发送市价单
+        # 3. 发送市价单（修复：添加精度格式化）
+        # 格式化数量以符合 Binance API 要求
+        formatted_quantity = format_quantity_for_binance(quantity, step_size=0.001)
+        
         params: Dict[str, Any] = {
             "symbol": symbol,
             "side": side_u,
             "type": "MARKET",
-            "quantity": quantity,
+            "quantity": formatted_quantity,  # 使用格式化后的字符串
             "recvWindow": self.exchange_conf.recv_window,
         }
         if position_side:

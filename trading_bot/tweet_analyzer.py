@@ -137,7 +137,8 @@ def ai_analyze_text(text: str, author: str, introduction: str) -> str:
         return content or "(AI 无内容返回)"
     
     except Exception as e:
-        return f"(AI 错误：{e})"
+        # 修复：标准化错误处理，抛出异常而非返回字符串
+        raise RuntimeError(f"AI分析失败: {e}") from e
 
 
 def normalize_symbol_from_ai(ai_res: Dict[str, Any]) -> Optional[str]:

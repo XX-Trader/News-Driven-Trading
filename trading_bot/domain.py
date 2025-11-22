@@ -11,6 +11,7 @@ trading_bot.domain
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
@@ -213,14 +214,16 @@ def calculate_order_quantity_from_balance(
     # 2. 理论数量
     raw_qty = quote_to_use / price
 
-    # 3. 按 step_size 向下取整
+    # 3. 按 step_size 向下取整（修复：当 qty < step_size 时返回0的错误）
     qty = raw_qty
     if step_size > 0:
-        steps = int(qty / step_size)
+        # 使用 math.floor 确保正确处理小数
+        steps = math.floor(qty / step_size)
         qty = steps * step_size
 
     # 4. 检查最小下单数量
     if min_qty > 0 and qty < min_qty:
+        # 如果计算后的数量小于最小下单量，返回0（不下单）
         return 0.0
 
     return float(qty)

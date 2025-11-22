@@ -44,6 +44,10 @@ class ExchangeConfig:
     dry_run: bool = False  # 强烈建议开发/调试阶段保持 True，实盘时显式改为 False
 
     quote_asset_for_position: str = "USDT"  # 用于计算仓位的计价资产，比如 USDT
+    
+    # 交易对精度配置（修复：将硬编码值移至配置）
+    min_qty: float = 0.001  # 最小下单数量（BTC为例）
+    step_size: float = 0.001  # 最小变动单位（步长）
 
 
 @dataclass
