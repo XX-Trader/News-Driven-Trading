@@ -71,8 +71,8 @@ def ai_analyze_text(text: str, author: str, introduction: str) -> str:
     config = load_config()
     
     # 读取系统提示词并填充占位符
-    base_dir = Path(__file__).resolve().parent.parent
-    prompt_path = base_dir / "推特抢跑" / "提示词.txt"
+    base_dir = Path(__file__).resolve().parent
+    prompt_path = base_dir / "提示词.txt"
     
     if not prompt_path.exists():
         return "(提示词文件不存在)"

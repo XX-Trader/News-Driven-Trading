@@ -64,8 +64,8 @@ except ImportError:
 
 def _get_user_logs_path(username: str) -> Path:
     """获取用户推文日志文件路径（JSONL 格式）"""
-    base_dir = Path(__file__).resolve().parent.parent
-    logs_dir = base_dir / "推特抢跑" / "twitter_media" / "user_logs"
+    base_dir = Path(__file__).resolve().parent
+    logs_dir = base_dir / "twitter_media" / "user_logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     return logs_dir / f"{username}.jsonl"
 

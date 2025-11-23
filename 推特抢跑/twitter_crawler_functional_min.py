@@ -153,7 +153,9 @@ def ai_analyze_text(text: str, proxy=False) -> str:
     # 允许通过函数参数或全局 USE_OPENAI_PROXY 控制是否走代理
     if proxy is None:
         proxy = USE_OPENAI_PROXY
-    promot = read_text("提示词.txt")
+    # 提示词.txt 现在位于 trading_bot/ 目录下
+    prompt_path = os.path.join(os.path.dirname(__file__), os.pardir, "trading_bot", "提示词.txt")
+    promot = read_text(prompt_path)
     promot = promot.replace('{text1}', text)
     try:
         import openai  # 延迟导入
