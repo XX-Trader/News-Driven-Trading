@@ -24,10 +24,8 @@ trading_bot.app_runner
 
 from __future__ import annotations
 import time
-from typing import Any
 
 import asyncio
-import importlib
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, cast
 
@@ -41,6 +39,7 @@ try:
     from twitter_source import fetch_latest_tweets, _append_tweet_to_jsonl
     from risk_exit import RiskManager
     from tweet_record_manager import TweetRecordManager, TweetProcessingRecord, get_tweet_preview, format_time_simple
+    from signal_filter import SignalFilter
 
 except ImportError:
     from .ai_base import AIInput, AIModelRouter
@@ -52,6 +51,7 @@ except ImportError:
     from .twitter_source import fetch_latest_tweets, _append_tweet_to_jsonl
     from .risk_exit import RiskManager
     from .tweet_record_manager import TweetRecordManager, TweetProcessingRecord, get_tweet_preview, format_time_simple
+    from .signal_filter import SignalFilter
 
 # ----------------------------
 # 类型别名与简单协议定义
@@ -604,6 +604,11 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
         poll_interval_sec=1.0,
     )
     print("[main] starting risk manager...")
+    
+    # 创建信号过滤器（新增）
+    signal_filter = SignalFilter(risk_config=app.config.risk)
+    print("[main] signal filter initialized")
+    
     # 追踪所有活跃的风控监控任务（修复：内存泄漏 - 持仓完成后未清理任务）
     monitor_tasks: Dict[str, asyncio.Task] = {}
     
@@ -628,6 +633,26 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
                 f"[SIGNAL] received: tweet_id={tweet_id}, symbol={signal.symbol}, side={signal.side}, "
                 f"confidence={signal.meta.get('confidence', 'N/A')}"
             )
+            
+            # 信号过滤
+            confidence = signal.meta.get("confidence")
+            filter_result = signal_filter.filter_signal(signal, ai_confidence=confidence)
+            
+            # 获取信号源的记录管理器（复用，避免重复获取）
+            signal_source = cast(TwitterCrawlerSignalSource, app.signal_source)
+            record_manager = signal_source.record_manager
+            
+            # 更新过滤结果到推文记录（自动持久化）
+            filter_status = "pass" if filter_result["passed"] else "reject"
+            filter_reason = filter_result["reason"]
+            record_manager.update_filter_result(tweet_id, filter_status, filter_reason)
+            
+            # [FILTER] 日志（精简：只输出一条）
+            print(f"[FILTER] {filter_reason}")
+            
+            # 如果过滤未通过，跳过该信号
+            if not filter_result["passed"]:
+                continue
 
             # 把全局 RiskConfig 和 signal 合并成 StrategyConfig
             strategy_conf: StrategyConfig = merge_strategy_config(app.config.risk, signal)
@@ -675,7 +700,7 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
             
             # 更新推文记录的交易信息（下单成功后）
             # 类型转换：我们知道在这个应用中 signal_source 一定是 TwitterCrawlerSignalSource
-            from .app_runner import TwitterCrawlerSignalSource
+
             signal_source = cast(TwitterCrawlerSignalSource, app.signal_source)
             
             if signal_source.record_manager.get_record(tweet_id):

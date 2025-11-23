@@ -44,6 +44,8 @@ class TweetProcessingRecord:
     - ai_success: AI分析是否成功解析为JSON
     - ai_raw_result: 失败时存储原始返回数据
     - ai_parsed_result: 成功时存储解析后的结构化数据
+    - filter_status: 信号过滤状态（pending/pass/reject）
+    - filter_reason: 过滤结果原因描述
     - trade_info: 实盘交易信息（可选，后续扩展）
     - retry_count: 重试次数
     - last_error: 最后一次错误信息
@@ -55,6 +57,8 @@ class TweetProcessingRecord:
     ai_success: bool
     ai_raw_result: Optional[str] = None
     ai_parsed_result: Optional[Dict[str, Any]] = None
+    filter_status: str = "pending"  # pending: 待过滤, pass: 通过, reject: 拒绝
+    filter_reason: Optional[str] = None  # 过滤结果原因（如"通过：置信度 85.0 >= 30"）
     trade_info: Optional[Dict[str, Any]] = None
     retry_count: int = 0
     last_error: Optional[str] = None
@@ -189,16 +193,38 @@ class TweetRecordManager:
         record.ai_raw_result = raw_result
         record.ai_parsed_result = parsed_result
         record.last_error = error
+        
+        # 实时持久化到文件
+        self.save_to_file()
     
     def update_retry_count(self, tweet_id: str, retry_count: int) -> None:
         """更新重试次数"""
         if tweet_id in self.records:
             self.records[tweet_id].retry_count = retry_count
+            # 实时持久化到文件
+            self.save_to_file()
+    
+    def update_filter_result(self, tweet_id: str, status: str, reason: str) -> None:
+        """
+        更新信号过滤结果
+        
+        参数：
+        - tweet_id: 推文ID
+        - status: 过滤状态（pending/pass/reject）
+        - reason: 过滤原因描述
+        """
+        if tweet_id in self.records:
+            self.records[tweet_id].filter_status = status
+            self.records[tweet_id].filter_reason = reason
+            # 实时持久化到文件
+            self.save_to_file()
     
     def update_trade_info(self, tweet_id: str, trade_info: Dict[str, Any]) -> None:
         """更新实盘交易信息"""
         if tweet_id in self.records:
             self.records[tweet_id].trade_info = trade_info
+            # 实时持久化到文件
+            self.save_to_file()
     
     def get_all_records(self) -> List[TweetProcessingRecord]:
         """获取所有记录"""
@@ -217,6 +243,105 @@ class TweetRecordManager:
             record for record in self.records.values()
             if record.ai_success
         ]
+    
+    def export_to_csv(self, output_path: Optional[str] = None) -> str:
+        """
+        导出记录到CSV文件
+        
+        参数：
+        - output_path: 输出文件路径（可选，默认使用标准路径）
+        
+        返回：
+        - 导出的文件路径
+        
+        导出字段：
+        - 推文时间（tweet_time）
+        - 内容（tweet_preview）
+        - 发送者（username）
+        - AI处理情况（ai_success）
+        - 过滤情况（filter_status/filter_reason）
+        - 下单情况（trade_info中的symbol/side/qty）
+        - 买入价（trade_info中的entry_price）
+        - 平仓价（trade_info中的exit_price）
+        - 盈利(U)（trade_info中的profit）
+        """
+        import csv
+        from pathlib import Path
+        
+        # 确定输出路径
+        if output_path is None:
+            base_dir = Path(__file__).resolve().parent.parent
+            output_path = str(base_dir / "推特抢跑" / "twitter_media" / "tweet_records_export.csv")
+        
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 获取所有记录并按时间排序
+        records = sorted(
+            self.records.values(),
+            key=lambda r: r.tweet_time,
+            reverse=True  # 最新的在前
+        )
+        
+        # 定义CSV列
+        csv_columns = [
+            "推文时间",
+            "内容",
+            "发送者",
+            "AI处理情况",
+            "过滤情况",
+            "交易对",
+            "买卖方向",
+            "数量",
+            "买入价",
+            "平仓价",
+            "盈利(U)"
+        ]
+        
+        # 写入CSV
+        with open(output_file, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(csv_columns)
+            
+            for record in records:
+                # AI处理情况
+                ai_status = "成功" if record.ai_success else "失败"
+                
+                # 过滤情况
+                filter_status = record.filter_reason or record.filter_status
+                
+                # 交易信息
+                symbol = ""
+                side = ""
+                qty = ""
+                entry_price = ""
+                exit_price = ""
+                profit = ""
+                
+                if record.trade_info:
+                    symbol = record.trade_info.get("symbol", "")
+                    side = record.trade_info.get("side", "")
+                    qty = str(record.trade_info.get("quantity", ""))
+                    entry_price = str(record.trade_info.get("entry_price", ""))
+                    exit_price = str(record.trade_info.get("exit_price", ""))
+                    profit = str(record.trade_info.get("profit", ""))
+                
+                # 写入一行
+                writer.writerow([
+                    record.tweet_time,
+                    record.tweet_preview,
+                    record.username,
+                    ai_status,
+                    filter_status,
+                    symbol,
+                    side,
+                    qty,
+                    entry_price,
+                    exit_price,
+                    profit
+                ])
+        
+        return str(output_file)
 
 
 def get_tweet_preview(text: str, max_length: int = 100) -> str:

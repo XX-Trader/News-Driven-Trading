@@ -27,6 +27,11 @@ try:
 except ImportError:
     from .domain import Position, StrategyConfig, ExitDecision
 
+try:
+    from position_manager import PositionManager
+except ImportError:
+    from .position_manager import PositionManager
+
 
 
 # --------------------
@@ -178,14 +183,16 @@ class PositionMonitor:
 
 class RiskManager:
     """
-    风控管理器骨架：
+    风控管理器：
     - 为每个新建 Position 创建一个监控任务（协程）；
     - 周期性获取最新价格，调用 ExitStrategy -> ExitDecision；
-    - 根据决策调用 close_executor 执行真实平仓。
+    - 根据决策调用 close_executor 执行真实平仓；
+    - 集成 PositionManager 实现持仓持久化。
 
     注意：
     - 这里不负责 actual 下单，只负责决策 + 调用传入的 close_executor。
     - 调度细节（创建任务、关闭任务）由上层 app_runner 统筹。
+    - 所有持仓变更都会通过 PositionManager 持久化到磁盘。
     """
 
     def __init__(
@@ -194,14 +201,45 @@ class RiskManager:
         price_fetcher: PriceFetcher,
         close_executor: CloseExecutor,
         poll_interval_sec: float = 1.0,
+        position_manager: Optional[PositionManager] = None,
     ) -> None:
         self.risk_conf = risk_conf
         self.price_fetcher = price_fetcher
         self.close_executor = close_executor
         self.poll_interval_sec = poll_interval_sec
-
+        
+        # 初始化 PositionManager（如果未提供则自动创建）
+        self.position_manager = position_manager or PositionManager()
+        
         # position_id -> PositionMonitor
         self._monitors: Dict[str, PositionMonitor] = {}
+        
+        # 启动时加载历史持仓到监控器
+        self._load_active_positions()
+
+    def _load_active_positions(self) -> None:
+        """
+        从 PositionManager 加载活跃持仓并创建监控器。
+        在 RiskManager 初始化时自动调用。
+        """
+        active_positions = self.position_manager.get_active_positions()
+        
+        for position_id, position in active_positions.items():
+            # 创建出场策略
+            exit_strategy: ExitStrategy = BasicExitStrategy(position, self.risk_conf)
+            
+            # 创建监控器
+            monitor = PositionMonitor(
+                position=position,
+                strategy=position.strategy,
+                exit_strategy=exit_strategy,
+            )
+            
+            self._monitors[position_id] = monitor
+            print(f"[RiskManager] loaded and monitoring position {position_id}")
+        
+        if active_positions:
+            print(f"[RiskManager] loaded {len(active_positions)} active positions from persistence")
 
     def _make_position_id(self, position: Position) -> str:
         # 简单实现：symbol + side + entry_price + quantity 组合
@@ -209,7 +247,7 @@ class RiskManager:
 
     def add_position(self, position: Position) -> str:
         """
-        为新建 Position 注册监控，返回内部的 position_id。
+        为新建 Position 注册监控并持久化，返回内部的 position_id。
         """
         pid = self._make_position_id(position)
         if pid in self._monitors:
@@ -223,13 +261,18 @@ class RiskManager:
             exit_strategy=exit_strategy,
         )
         self._monitors[pid] = monitor
+        
+        # 持久化持仓
+        self.position_manager.add_position(pid, position)
+        
         return pid
 
     def remove_position(self, position_id: str) -> None:
         """
-        取消对某一持仓的监控。
+        取消对某一持仓的监控并从持久化中移除。
         """
         self._monitors.pop(position_id, None)
+        self.position_manager.remove_position(position_id)
 
     async def monitor_loop(self, position_id: str) -> None:
         """
@@ -265,9 +308,15 @@ class RiskManager:
                     # 更新 remaining_qty（简单按比例减少）
                     qty_to_close = pos.remaining_qty * min(max(size_pct, 0.0), 1.0)
                     pos.remaining_qty -= qty_to_close
+                    
+                    # 持久化更新后的持仓
+                    self.position_manager.update_position(position_id, pos)
+                    
                     if pos.remaining_qty <= 0:
                         pos.remaining_qty = 0
                         monitor.active = False
+                        # 完全平仓后从持久化中移除
+                        self.position_manager.remove_position(position_id)
                         break
 
             await asyncio.sleep(self.poll_interval_sec)

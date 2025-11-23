@@ -67,6 +67,23 @@ class StrategyConfig:
     stop_loss_pct: float
     take_profit_scheme: List[Dict[str, float]]
 
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典"""
+        return {
+            "position_pct": self.position_pct,
+            "stop_loss_pct": self.stop_loss_pct,
+            "take_profit_scheme": self.take_profit_scheme,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "StrategyConfig":
+        """从字典反序列化"""
+        return cls(
+            position_pct=float(data.get("position_pct", 0.0)),
+            stop_loss_pct=float(data.get("stop_loss_pct", 0.0)),
+            take_profit_scheme=list(data.get("take_profit_scheme", [])),
+        )
+
 
 def merge_strategy_config(
     risk_conf: RiskConfig,
@@ -148,6 +165,36 @@ class Position:
     def __post_init__(self) -> None:
         if self.remaining_qty <= 0:
             self.remaining_qty = self.quantity
+
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典"""
+        return {
+            "symbol": self.symbol,
+            "side": self.side,
+            "entry_price": self.entry_price,
+            "quantity": self.quantity,
+            "strategy": self.strategy.to_dict(),
+            "remaining_qty": self.remaining_qty,
+            "realized_pnl": self.realized_pnl,
+            "extra": dict(self.extra),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Position":
+        """从字典反序列化"""
+        strategy_data = data.get("strategy", {})
+        strategy = StrategyConfig.from_dict(strategy_data) if isinstance(strategy_data, dict) else StrategyConfig(0.0, 0.0, [])
+
+        return cls(
+            symbol=str(data.get("symbol", "")),
+            side=str(data.get("side", "")),
+            entry_price=float(data.get("entry_price", 0.0)),
+            quantity=float(data.get("quantity", 0.0)),
+            strategy=strategy,
+            remaining_qty=float(data.get("remaining_qty", 0.0)),
+            realized_pnl=float(data.get("realized_pnl", 0.0)),
+            extra=dict(data.get("extra", {})),
+        )
 
 
 # --------------------

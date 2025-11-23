@@ -64,6 +64,12 @@ class RiskConfig:
     )
     default_position_pct: float = 0.02  # 默认单次开仓 2% 资金
     exit_strategy_type: str = "basic"  # 当前只有 basic，未来可扩展 demark / ai 等
+    
+    # 信号过滤配置（新增）
+    min_confidence: float = 30.0  # 最低置信度阈值（AI返回的置信度 >= 此值才通过）
+    symbol_blacklist: List[str] = field(
+        default_factory=lambda: ["DOGE", "SHIB", "PEPE", "FLOKI"]  # 黑名单币种（检查symbol是否包含这些币种）
+    )
 
 
 @dataclass
