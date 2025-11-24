@@ -275,7 +275,7 @@ AppConfig
   - `save_to_file()`: 持久化到JSON文件
   - `load_from_file()`: 从文件加载
 
-**存储格式**: `推特抢跑/twitter_media/tweet_records.json`
+**存储格式**: `trading_bot/twitter_media/tweet_records.json`
 
 **设计优势**:
 - **双存储**: 内存Set快速判断 + 文件持久化
@@ -598,7 +598,7 @@ pip install aiohttp openai python-dotenv
      ```
 
 3. **提示词文件**:
-   - 确保 `推特抢跑/提示词.txt` 存在
+   - 确保 `trading_bot/提示词.txt` 存在
    - 包含 `{text1}`, `{text2}`, `{text3}` 占位符
 
 ### 7.3 运行方式
@@ -610,7 +610,7 @@ python -m trading_bot.main
 ```
 
 **特点**:
-- 读取 `推特抢跑/twitter_media/*.json`
+- 读取 `trading_bot/twitter_media/*.json`
 - 不依赖外部API
 - 适合功能验证和调试
 
@@ -633,7 +633,7 @@ python -m trading_bot.main
 tail -f trading_bot.log
 
 # 查看推文处理记录
-cat 推特抢跑/twitter_media/tweet_records.json
+cat trading_bot/twitter_media/tweet_records.json
 ```
 
 #### 7.4.2 关键指标

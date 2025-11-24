@@ -6,7 +6,7 @@
 
 ## 1. Executive Summary
 
-This report analyzes the alignment between the `trading_bot/` codebase and the project documentation. The primary finding is that `CLAUDE.md` (v2.3.1) accurately reflects the current "Minimalist MVP" implementation, while `推特抢跑/TRADE_SYSTEM_REQUIREMENTS.md` (v0.1.0) is significantly outdated and describes a more complex system that has been simplified.
+This report analyzes the alignment between the `trading_bot/` codebase and the project documentation. The primary finding is that `CLAUDE.md` (v2.3.1) accurately reflects the current "Minimalist MVP" implementation, while `trading_bot/TRADE_SYSTEM_REQUIREMENTS.md` (v0.1.0) is significantly outdated and describes a more complex system that has been simplified.
 
 **Recommendation:**
 1.  **Adopt `CLAUDE.md` as the single source of truth.**
@@ -19,7 +19,7 @@ This report analyzes the alignment between the `trading_bot/` codebase and the p
 
 ### 2.1 Source of Truth
 *   **Primary:** `CLAUDE.md` (v2.3.1) - Accurately describes the current "No Database, No Complex Monitoring" philosophy and the actual feature set (TweetRecordManager, SignalFilter, etc.).
-*   **Outdated:** `推特抢跑/TRADE_SYSTEM_REQUIREMENTS.md` (v0.1.0) - Describes features like "Google Connectivity Check", "Proxy Auto-Switching", and "DeMark Exit Strategy" which are either not implemented or simplified.
+*   **Outdated:** `trading_bot/TRADE_SYSTEM_REQUIREMENTS.md` (v0.1.0) - Describes features like "Google Connectivity Check", "Proxy Auto-Switching", and "DeMark Exit Strategy" which are either not implemented or simplified.
 
 ### 2.2 Doc vs. Doc Conflicts
 

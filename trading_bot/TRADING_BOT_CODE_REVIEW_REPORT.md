@@ -6,7 +6,7 @@
 
 **审查日期**: 2025-11-22  
 **审查范围**: trading_bot/ 目录下所有 Python 文件  
-**参考文档**: CLAUDE.md, 推特抢跑/需求确认.md, 推特抢跑/TRADE_SYSTEM_REQUIREMENTS.md
+**参考文档**: CLAUDE.md, trading_bot/需求确认.md, trading_bot/TRADE_SYSTEM_REQUIREMENTS.md
 
 ---
 

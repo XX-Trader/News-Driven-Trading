@@ -73,7 +73,7 @@
 >         self.records[tweet_id].trade_info = trade_info
 > ```
 > 
-> **存储位置**: `推特抢跑/twitter_media/tweet_records.json`
+> **存储位置**: `trading_bot/twitter_media/tweet_records.json`
 > 
 > **记录内容**:
 > ```json

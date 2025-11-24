@@ -49,7 +49,7 @@ _append_tweet_to_jsonl(username, tweet)
 **JSONL 存储结构**：
 
 ```
-推特抢跑/twitter_media/
+trading_bot/twitter_media/
 ├── processed_ids.json              # ID 去重缓存
 └── user_logs/
     ├── elonmusk.jsonl             # 每个用户的推文日志（JSONL 格式）
@@ -77,7 +77,7 @@ _append_tweet_to_jsonl(username, tweet)
 
 继续使用 `mark_as_processed()` 标记处理过的推文 ID。
 
-### 3. **推特抢跑/twitter_media/processed_ids.json**（自动初始化）
+### 3. **trading_bot/twitter_media/processed_ids.json**（自动初始化）
 
 格式保持不变：
 ```json
@@ -169,16 +169,16 @@ fetch_func = _fetch_local_wrapper
 
 ```bash
 # 1. 检查目录是否自动创建
-ls -la 推特抢跑/twitter_media/user_logs/
+ls -la trading_bot/twitter_media/user_logs/
 
 # 2. 检查 JSONL 文件是否生成（每个用户一个）
-cat 推特抢跑/twitter_media/user_logs/elonmusk.jsonl | head -1
+cat trading_bot/twitter_media/user_logs/elonmusk.jsonl | head -1
 
 # 3. 验证 JSONL 格式（每行一个完整 JSON 对象）
-cat 推特抢跑/twitter_media/user_logs/elonmusk.jsonl | jq . | head -20
+cat trading_bot/twitter_media/user_logs/elonmusk.jsonl | jq . | head -20
 
 # 4. 计算推文总数
-wc -l 推特抢跑/twitter_media/user_logs/*.jsonl
+wc -l trading_bot/twitter_media/user_logs/*.jsonl
 
 # 5. 验证追加模式（运行两次，第二次行数应增加而非重置）
 ```
@@ -207,7 +207,7 @@ wc -l 推特抢跑/twitter_media/user_logs/*.jsonl
 | Python | 3.8+ |
 | aiohttp | 可选（`pip install aiohttp`）；无则返回 [] |
 | asyncio | 内置 |
-| 存储目录 | `推特抢跑/twitter_media/` |
+| 存储目录 | `trading_bot/twitter_media/` |
 | 缓存文件 | `processed_ids.json` |
 
 ---
@@ -249,7 +249,7 @@ wc -l 推特抢跑/twitter_media/user_logs/*.jsonl
 - [`trading_bot/twitter_source.py`](trading_bot/twitter_source.py) - 数据源实现
 - [`trading_bot/app_runner.py`](trading_bot/app_runner.py) - 应用编排与 ID 标记
 - [`trading_bot/config.py`](trading_bot/config.py) - TwitterAPIConfig 配置
-- [`推特抢跑/twitter_media/processed_ids.json`](推特抢跑/twitter_media/processed_ids.json) - ID 缓存文件
+- [`trading_bot/twitter_media/processed_ids.json`](trading_bot/twitter_media/processed_ids.json) - ID 缓存文件
 
 ---
 

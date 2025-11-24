@@ -74,7 +74,7 @@ async def fetch_latest_tweets_from_local_with_logging() -> List[Dict[str, Any]]:
     """
     【版本 B - 本地版】从本地 JSON 读取推文并记录到 JSONL（初期测试推荐）
     
-    配置项：无需 API 密钥，直接读取 推特抢跑/twitter_media/*.json
+    配置项：无需 API 密钥，直接读取 trading_bot/twitter_media/*.json
     推荐用途：初期开发、功能验证、快速迭代
     
     特性：
@@ -182,7 +182,7 @@ class TwitterTrigger:
 ## 目录结构
 
 ```
-推特抢跑/twitter_media/
+trading_bot/twitter_media/
 ├── processed_ids.json              # 已处理推文 ID 列表（去重缓存）
 ├── user_logs/                      # 用户推文日志目录
 │   ├── elonmusk.jsonl
@@ -195,7 +195,7 @@ class TwitterTrigger:
 
 ## JSONL 日志格式
 
-**文件**：`推特抢跑/twitter_media/user_logs/{username}.jsonl`
+**文件**：`trading_bot/twitter_media/user_logs/{username}.jsonl`
 
 **内容示例**：
 ```json
@@ -217,16 +217,16 @@ class TwitterTrigger:
 
 ```bash
 # 1. 确保本地 JSON 文件存在
-ls 推特抢跑/twitter_media/*.json
+ls trading_bot/twitter_media/*.json
 
 # 2. 运行 app_runner，观察日志
 python trading_bot/app_runner.py
 
 # 3. 检查 JSONL 日志是否生成
-ls 推特抢跑/twitter_media/user_logs/
+ls trading_bot/twitter_media/user_logs/
 
 # 4. 查看日志内容（示例）
-head -5 推特抢跑/twitter_media/user_logs/elonmusk.jsonl
+head -5 trading_bot/twitter_media/user_logs/elonmusk.jsonl
 ```
 
 ### 后期集成（API 版本）
@@ -283,16 +283,16 @@ twitter_api:
 
 ```bash
 # 查看已处理 ID 缓存
-cat 推特抢跑/twitter_media/processed_ids.json
+cat trading_bot/twitter_media/processed_ids.json
 
 # 查看本地推文日志
-cat 推特抢跑/twitter_media/user_logs/elonmusk.jsonl | python -m json.tool
+cat trading_bot/twitter_media/user_logs/elonmusk.jsonl | python -m json.tool
 
 # 统计已处理推文数量
-cat 推特抢跑/twitter_media/processed_ids.json | grep -o '"' | wc -l
+cat trading_bot/twitter_media/processed_ids.json | grep -o '"' | wc -l
 
 # 清空日志（谨慎操作）
-rm -rf 推特抢跑/twitter_media/user_logs/*.jsonl
+rm -rf trading_bot/twitter_media/user_logs/*.jsonl
 ```
 
 ---

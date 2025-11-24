@@ -156,7 +156,7 @@ worker → 异步AI调用（唯一入口）
 2. **功能验证**
    - 检查 `[TWITTER_API] 获取 X 条新推文` 日志
    - 检查 `[_to_trade_signal]` 日志不应出现同步 AI 调用
-   - 检查 JSONL 日志是否生成：`推特抢跑/twitter_media/logs/`
+   - 检查 JSONL 日志是否生成：`trading_bot/twitter_media/logs/`
    - 检查 `processed_ids.json` 是否正确更新
 
 3. **性能验证**

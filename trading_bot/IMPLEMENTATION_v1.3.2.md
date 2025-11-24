@@ -34,15 +34,15 @@
 > ```python
 > async def _load_twitter_fetch_func() -> FetchLatestTweetsFunc:
 >     """
->     从 '推特抢跑/twitter_crawler_functional_min.py' 导入获取最近消息的函数。
+>     从 'trading_bot/twitter_crawler_functional_min.py' 导入获取最近消息的函数。
 >     """
->     module = importlib.import_module("推特抢跑.twitter_crawler_functional_min".replace("/", "."))
+>     module = importlib.import_module("trading_bot.twitter_crawler_functional_min".replace("/", "."))
 >     func = getattr(module, "fetch_latest_tweets", None)
 >     # ...
 > ```
 > 
 > 这个函数：
-> - 尝试从 `推特抢跑/twitter_crawler_functional_min.py` 导入
+> - 尝试从 `trading_bot/twitter_crawler_functional_min.py` 导入
 > - 使用 `importlib.import_module` 动态导入
 > - 与新架构不兼容（数据获取逻辑已在 `twitter_source.py`）
 > 
@@ -56,7 +56,7 @@
 > ```python
 > async def _load_twitter_fetch_func() -> FetchLatestTweetsFunc:
 >     """
->     从 '推特抢跑/twitter_crawler_functional_min.py' 导入获取最近消息的函数。
+>     从 'trading_bot/twitter_crawler_functional_min.py' 导入获取最近消息的函数。
 > 
 >     你需要在该文件中提供一个协程函数，例如：
 >         async def fetch_latest_tweets() -> list[dict]:
@@ -64,11 +64,11 @@
 > 
 >     若不存在，则抛异常。
 >     """
->     module = importlib.import_module("推特抢跑.twitter_crawler_functional_min".replace("/", "."))
+>     module = importlib.import_module("trading_bot.twitter_crawler_functional_min".replace("/", "."))
 >     func = getattr(module, "fetch_latest_tweets", None)
 >     if func is None:
 >         raise RuntimeError(
->             "在 '推特抢跑/twitter_crawler_functional_min.py' 中找不到 fetch_latest_tweets 函数，"
+>             "在 'trading_bot/twitter_crawler_functional_min.py' 中找不到 fetch_latest_tweets 函数，"
 >             "请实现：async def fetch_latest_tweets() -> list[dict]"
 >         )
 >     return func
@@ -96,8 +96,8 @@
 > 
 >     base_dir = Path(__file__).resolve().parent.parent
 >     tweet_conf = TweetSignalSourceConfig(
->         crawled_json_dir=base_dir / "推特抢跑" / "twitter_media",
->         processed_id_path=base_dir / "推特抢跑" / "twitter_media" / "processed_ids.json",
+>         crawled_json_dir=base_dir / "trading_bot" / "twitter_media",
+>         processed_id_path=base_dir / "trading_bot" / "twitter_media" / "processed_ids.json",
 >         poll_interval_sec=10,  # 改为 10 秒，每 10 秒执行一次推特爬虫 → AI 分析 → 下单
 >     )
 > 
@@ -131,8 +131,8 @@
 > 
 >     base_dir = Path(__file__).resolve().parent.parent
 >     tweet_conf = TweetSignalSourceConfig(
->         crawled_json_dir=base_dir / "推特抢跑" / "twitter_media",
->         processed_id_path=base_dir / "推特抢跑" / "twitter_media" / "processed_ids.json",
+>         crawled_json_dir=base_dir / "trading_bot" / "twitter_media",
+>         processed_id_path=base_dir / "trading_bot" / "twitter_media" / "processed_ids.json",
 >         poll_interval_sec=10,  # 每 10 秒执行一次：推特查询 → AI 分析 → 下单
 >     )
 > 
@@ -222,7 +222,7 @@
 > 
 > ```bash
 > # 确保本地 JSON 文件存在
-> ls 推特抢跑/twitter_media/*.json
+> ls trading_bot/twitter_media/*.json
 > 
 > # 运行应用
 > python trading_bot/main.py
@@ -258,14 +258,14 @@
 > ### 兼容性与清理
 > 
 > - ✅ **已删除**：`importlib` 导入语句（不再需要动态导入）
-> - ✅ **已删除**：`"推特抢跑/twitter_crawler_functional_min.py"` 的文档引用
+> - ✅ **已删除**：`"trading_bot/twitter_crawler_functional_min.py"` 的文档引用
 > - ✅ **保留**：`FetchLatestTweetsFunc` 类型别名（用于类型提示）
 > - ✅ **保留**：异常处理机制（失败时回退到 `InMemorySignalSource`）
 > 
 > ### 遗留文件
 > 
 > 如果存在以下文件，可以安全删除（不再使用）：
-> - `推特抢跑/twitter_crawler_functional_min.py`
+> - `trading_bot/twitter_crawler_functional_min.py`
 > 
 > ---
 > 
@@ -311,5 +311,5 @@
 > 
 > 1. 本地验证：运行 `python trading_bot/main.py`，确认信号源正常工作
 > 2. API 集成：配置 `config.py` 中的 `twitter_api.api_key`
-> 3. 清理旧文件：删除 `推特抢跑/twitter_crawler_functional_min.py`（如果存在）
+> 3. 清理旧文件：删除 `trading_bot/twitter_crawler_functional_min.py`（如果存在）
 > 
