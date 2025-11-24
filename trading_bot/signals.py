@@ -6,7 +6,7 @@ trading_bot.signals
 设计目标：
 - 提供统一的异步信号接口，返回 domain.TradeSignal；
 - 目前先给出一个简单的占位实现（例如从内存队列 / 手动注入信号）；
-- 后续可以在这里对接推特抢跑模块，把推特信号转换为 TradeSignal。
+- 后续可以在这里对接trading_bot模块，把推特信号转换为 TradeSignal。
 """
 
 from __future__ import annotations
@@ -66,4 +66,4 @@ class InMemorySignalSource(SignalSource):
 
 
 # TODO: 在后续版本中，这里可以添加 TwitterSignalSource，
-# 从推特抢跑模块输出的结果中解析并构造 TradeSignal。
+# 从trading_bot模块输出的结果中解析并构造 TradeSignal。

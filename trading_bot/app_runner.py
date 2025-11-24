@@ -3,7 +3,7 @@ trading_bot.app_runner
 
 主应用编排逻辑（MVP 版，可运行）：
 
-- 定时从"推特抢跑"侧的爬虫接口获取最新消息（20 条左右）；
+- 定时从"trading_bot"侧的爬虫接口获取最新消息（20 条左右）；
 - 将原始消息保存为 JSON 文件；
 - 使用 TweetRecordManager 进行推文记录管理和去重判断（内存+文件双存储）；
 - 对未处理的消息可以接 AI 层（当前用 Dummy，它只是打个标签，不做强过滤）；
@@ -17,7 +17,7 @@ trading_bot.app_runner
 
 注意：
 - 这里不会直接调用真实的推特 API，而是预期你在
-  `推特抢跑/twitter_crawler_functional_min.py` 中提供一个函数接口，例如：
+  `trading_bot/twitter_crawler_functional_min.py` 中提供一个函数接口，例如：
       async def fetch_latest_tweets() -> list[dict]
   本模块通过 import 调用即可。
 """
@@ -777,11 +777,3 @@ async def start_trading_app() -> None:
         await app.exchange_client.close()
         print("[trading_app] exchange client closed")
 
-
-async def stop_trading_app(app: TradingAppContext) -> None:
-    """
-    预留的停止逻辑：取消所有任务，清理资源。
-    """
-    for t in app.tasks:
-        t.cancel()
-    # TODO: 关闭 aiohttp 会话、持久化必要状态等

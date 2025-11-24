@@ -27,10 +27,7 @@ try:
 except ImportError:
     from .domain import Position, StrategyConfig, ExitDecision
 
-try:
-    from position_manager import PositionManager
-except ImportError:
-    from .position_manager import PositionManager
+# PositionManager removed - positions now stored in memory only
 
 
 
@@ -201,45 +198,22 @@ class RiskManager:
         price_fetcher: PriceFetcher,
         close_executor: CloseExecutor,
         poll_interval_sec: float = 1.0,
-        position_manager: Optional[PositionManager] = None,
     ) -> None:
         self.risk_conf = risk_conf
         self.price_fetcher = price_fetcher
         self.close_executor = close_executor
         self.poll_interval_sec = poll_interval_sec
         
-        # 初始化 PositionManager（如果未提供则自动创建）
-        self.position_manager = position_manager or PositionManager()
-        
-        # position_id -> PositionMonitor
+        # position_id -> PositionMonitor (positions stored in memory only)
         self._monitors: Dict[str, PositionMonitor] = {}
-        
-        # 启动时加载历史持仓到监控器
-        self._load_active_positions()
 
     def _load_active_positions(self) -> None:
         """
-        从 PositionManager 加载活跃持仓并创建监控器。
+        加载活跃持仓并创建监控器（目前为空实现，持仓存储在内存中）。
         在 RiskManager 初始化时自动调用。
         """
-        active_positions = self.position_manager.get_active_positions()
-        
-        for position_id, position in active_positions.items():
-            # 创建出场策略
-            exit_strategy: ExitStrategy = BasicExitStrategy(position, self.risk_conf)
-            
-            # 创建监控器
-            monitor = PositionMonitor(
-                position=position,
-                strategy=position.strategy,
-                exit_strategy=exit_strategy,
-            )
-            
-            self._monitors[position_id] = monitor
-            print(f"[RiskManager] loaded and monitoring position {position_id}")
-        
-        if active_positions:
-            print(f"[RiskManager] loaded {len(active_positions)} active positions from persistence")
+        # NOTE: Positions are stored in memory only. Persistence removed as per MVP approach.
+        pass
 
     def _make_position_id(self, position: Position) -> str:
         # 简单实现：symbol + side + entry_price + quantity 组合
@@ -262,8 +236,7 @@ class RiskManager:
         )
         self._monitors[pid] = monitor
         
-        # 持久化持仓
-        self.position_manager.add_position(pid, position)
+        # NOTE: Position persistence removed. Position stored in memory only.
         
         return pid
 
@@ -272,7 +245,7 @@ class RiskManager:
         取消对某一持仓的监控并从持久化中移除。
         """
         self._monitors.pop(position_id, None)
-        self.position_manager.remove_position(position_id)
+        # NOTE: Position persistence removed. Position removed from memory only.
 
     async def monitor_loop(self, position_id: str) -> None:
         """
@@ -309,14 +282,13 @@ class RiskManager:
                     qty_to_close = pos.remaining_qty * min(max(size_pct, 0.0), 1.0)
                     pos.remaining_qty -= qty_to_close
                     
-                    # 持久化更新后的持仓
-                    self.position_manager.update_position(position_id, pos)
+                    # NOTE: Position persistence removed. Position updated in memory only.
                     
                     if pos.remaining_qty <= 0:
                         pos.remaining_qty = 0
                         monitor.active = False
-                        # 完全平仓后从持久化中移除
-                        self.position_manager.remove_position(position_id)
+                        # 完全平仓后从内存中移除
+                        # NOTE: Position persistence removed. Position removed from memory only.
                         break
 
             await asyncio.sleep(self.poll_interval_sec)

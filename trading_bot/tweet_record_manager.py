@@ -101,7 +101,7 @@ class TweetRecordManager:
     def _get_default_records_path(self) -> Path:
         """获取默认记录文件路径"""
         base_dir = Path(__file__).resolve().parent.parent
-        media_dir = base_dir / "推特抢跑" / "twitter_media"
+        media_dir = base_dir / "trading_bot" / "twitter_media"
         media_dir.mkdir(parents=True, exist_ok=True)
         return media_dir / "tweet_records.json"
     
@@ -271,7 +271,7 @@ class TweetRecordManager:
         # 确定输出路径
         if output_path is None:
             base_dir = Path(__file__).resolve().parent.parent
-            output_path = str(base_dir / "推特抢跑" / "twitter_media" / "tweet_records_export.csv")
+            output_path = str(base_dir / "trading_bot" / "twitter_media" / "tweet_records_export.csv")
         
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)

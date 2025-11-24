@@ -15,7 +15,7 @@ Binance 异步 REST / Futures 适配（简化版，参考 binance.Binance 类的
 
 注意：
 - 代码风格参考了根目录的 binance.Binance，但改成异步 aiohttp 实现；
-- 所有 HTTP 调用复用 trading_bot.network 中创建的 aiohttp.ClientSession，代理逻辑在 network 中统一处理；
+- 所有 HTTP 调用直接使用 aiohttp.ClientSession，代理逻辑在本模块中根据配置直接处理；
 - API KEY 已在 config.load_config() 中解析为 exchange._resolved_api_key/_resolved_api_secret；
 - 是否真实下单由 ExchangeConfig.dry_run 控制；
 - 当前只实现项目最需要的最小子集，未做完备错误分类与限频处理，后续可以按需扩展。
@@ -35,13 +35,7 @@ try:
 except ImportError:
     from .config import AppConfig, ExchangeConfig
 
-
-try:
-    from network import create_http_client
-except ImportError:
-    from .network import create_http_client
-
-
+# Note: network module dependency removed - session creation is now inline
 
 BINANCE_TIMESTAMP_MARGIN_MS = 1000  # 本地时间与服务器时间的安全边际
 
@@ -125,16 +119,23 @@ class BinanceAsyncClient:
 
     async def _ensure_session(self) -> None:
         """
-        确保已创建 aiohttp session，并根据网络配置设置代理。
+        确保已创建 aiohttp session，并根据代理配置设置代理。
 
-        使用 trading_bot.network.create_http_client 来保持行为一致：
-        - 由 network 层根据 ProxyConfig/Google 连通性决定是否启用代理；
-        - 这里只保存返回的 proxy_url，后续在 _request 中原样传给 aiohttp。
+        代理决策规则：
+        - 如果 config.proxy.use_proxy_by_default=True，则使用 config.proxy.proxy_url
+        - 如果 config.proxy.use_proxy_by_default=False，则不使用代理（None）
         """
         if self._session is None or self._session.closed:
-            session, proxy_url = await create_http_client(self.config)
-            self._session = session
-            self._proxy_url_in_use = proxy_url
+            # 直接创建 aiohttp session
+            self._session = aiohttp.ClientSession()
+            
+            # 根据配置决定是否使用代理
+            proxy_config = self.config.proxy
+            
+            if proxy_config.use_proxy_by_default:
+                self._proxy_url_in_use = proxy_config.proxy_url
+            else:
+                self._proxy_url_in_use = None
 
     async def close(self) -> None:
         """

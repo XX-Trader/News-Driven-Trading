@@ -112,7 +112,7 @@ def _append_tweet_to_jsonl(username: str, tweet: Dict[str, Any]) -> None:
 
 def fetch_latest_tweets_from_local_json() -> List[Dict[str, Any]]:
     """
-    从 推特抢跑/twitter_media/ 目录扫描所有 JSON 文件，
+    从 trading_bot/twitter_media/ 目录扫描所有 JSON 文件，
     合并为推文列表返回。
     
     支持两种 JSON 格式：
@@ -126,7 +126,7 @@ def fetch_latest_tweets_from_local_json() -> List[Dict[str, Any]]:
     本函数仅负责数据获取，不再进行去重判断
     """
     base_dir = Path(__file__).resolve().parent.parent
-    media_dir = base_dir / "推特抢跑" / "twitter_media"
+    media_dir = base_dir / "trading_bot" / "twitter_media"
     
     if not media_dir.exists():
         print(f"[TWITTER_API] media_dir not found: {media_dir}")
@@ -334,7 +334,7 @@ async def fetch_latest_tweets_from_local_with_logging() -> List[Dict[str, Any]]:
     """
     【版本 B - 本地版】从本地 JSON 读取推文（初期测试推荐）
     
-    配置项：无需 API 密钥，直接读取 推特抢跑/twitter_media/*.json
+    配置项：无需 API 密钥，直接读取 trading_bot/twitter_media/*.json
     推荐用途：初期开发、功能验证、快速迭代
     
     特性：

@@ -1,15 +1,12 @@
 """
 trading_bot.tweet_analyzer
 
-从 notebook 推特抢跑/twitter_analysis one.ipynb 抽离的核心分析函数。
+从 notebook trading_bot/twitter_analysis one.ipynb 抽离的核心分析函数。
 职责：AI 分析推文文本 → 提取交易币种、方向、置信度
 
 设计：
-- call_ai_for_tweet(text, author, introduction) → Dict[str, Any]
-  同步调用 Poe API 分析推文（v1.0.0，已弃用）
-  
 - call_ai_for_tweet_async(text, author, introduction, timeout=30) → Dict[str, Any]
-  异步调用 Poe API（v1.2.0，新增，用于后台队列处理）
+  异步调用 Poe API（v1.2.0，用于后台队列处理）
   
 - detect_trade_symbol(ai_res) → Optional[str]
   从 AI 结果提取交易币种，转换为 Binance symbol 格式 (e.g., "BTCUSDT")
@@ -27,28 +24,6 @@ try:
 except ImportError:
     from .config import load_config
 
-# 模块级变量：缓存网络检测结果（None=未检测，True=能直连，False=需代理）
-_network_check_result = None
-
-def _check_network_once() -> bool:
-    """
-    只检查一次网络连通性，缓存结果供后续调用使用。
-    
-    返回：
-    - True: 能直连 Google/外网
-    - False: 不能直连，需要使用代理
-    """
-    global _network_check_result
-    if _network_check_result is None:
-        # 首次检测
-        import requests
-        try:
-            # 测试能否直连外网
-            test_response = requests.get("https://www.google.com", timeout=3)
-            _network_check_result = test_response.status_code == 200
-        except Exception:
-            _network_check_result = False
-    return _network_check_result
 
 
 def read_text(path: str) -> str:
@@ -86,36 +61,40 @@ def ai_analyze_text(text: str, author: str, introduction: str) -> str:
     try:
         import openai
         
-        # 使用缓存的网络检测结果决定是否需要代理
-        google_reachable = _check_network_once()
+        # v2.1.0: 简化代理逻辑，直接使用配置（移除网络检测依赖）
+        # 如果配置中设置了代理，则使用；否则直连
+        proxy_config = getattr(config.ai, 'proxy_config', None)
         
-        # 如果能直连，不使用代理；如果不能直连，使用代理
-        if google_reachable:
-            # 能直连外网，不使用代理
-            client = openai.OpenAI(
-                api_key=config.ai.poe_api_key,
-                base_url=config.ai.poe_base_url
-            )
-        else:
-            # 不能直连外网，使用代理
+        if proxy_config and (proxy_config.get('http') or proxy_config.get('https')):
+            # 配置中设置了代理，使用代理
             try:
                 from httpx import Client as _HttpxClient
-                # httpx 的 proxy 参数需要字符串 URL
-                proxy_url = config.ai.proxy_config.get("https") or config.ai.proxy_config.get("http", "")
-                http_client = _HttpxClient(proxy=proxy_url, timeout=30.0)
+                # httpx 的 proxies 参数需要字典格式
+                proxies = {
+                    'http://': proxy_config.get('http', ''),
+                    'https://': proxy_config.get('https', '')
+                }
+                http_client = _HttpxClient(proxies=proxies, timeout=30.0)
                 client = openai.OpenAI(
                     api_key=config.ai.poe_api_key,
                     base_url=config.ai.poe_base_url,
                     http_client=http_client
                 )
             except Exception:
+                # 备用方案：使用环境变量
                 import os as _os
-                _os.environ["HTTP_PROXY"] = config.ai.proxy_config.get("http", "")
-                _os.environ["HTTPS_PROXY"] = config.ai.proxy_config.get("https", "")
+                _os.environ["HTTP_PROXY"] = proxy_config.get("http", "")
+                _os.environ["HTTPS_PROXY"] = proxy_config.get("https", "")
                 client = openai.OpenAI(
                     api_key=config.ai.poe_api_key,
                     base_url=config.ai.poe_base_url
                 )
+        else:
+            # 无代理配置，直连
+            client = openai.OpenAI(
+                api_key=config.ai.poe_api_key,
+                base_url=config.ai.poe_base_url
+            )
         
         chat = client.chat.completions.create(
             model=config.ai.poe_model,

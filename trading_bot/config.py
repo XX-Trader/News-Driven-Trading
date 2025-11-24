@@ -89,7 +89,8 @@ class AIConfig:
     )
     poe_base_url: str = "https://api.poe.com/v1"
     # poe_model: str = "gpt-5.1"
-    poe_model: str = "Kimi-K2-Thinking"
+    # poe_model: str = "Kimi-K2-Thinking"
+    poe_model: str = "gemini-3-pro"
 
     # AI代理配置（MVP新增）
     use_proxy: bool = False  # 是否启用代理（默认真盘直连，调试可改为True）

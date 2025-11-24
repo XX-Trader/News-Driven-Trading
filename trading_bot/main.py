@@ -7,10 +7,10 @@ trading_bot.main
     python -m trading_bot.main
 
 前提条件：
-1. 已在 `推特抢跑/twitter_crawler_functional_min.py` 中实现：
+1. 已在 `trading_bot/twitter_crawler_functional_min.py` 中实现：
        async def fetch_latest_tweets() -> list[dict]
 2. 已准备好提示词文件：
-       推特抢跑/提示词.txt
+       trading_bot/提示词.txt
 3. 已正确配置 Binance 相关参数（见 trading_bot.config.AppConfig / ExchangeConfig）。
 """
 
