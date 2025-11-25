@@ -368,18 +368,36 @@ def get_tweet_preview(text: str, max_length: int = 100) -> str:
     return preview
 
 
-def format_time_simple(timestamp: Optional[float] = None) -> str:
+def format_time_simple(time_input: Optional[Any] = None) -> str:
     """
-    简单时间格式化（默认使用当前时间）
+    简单时间格式化（支持多种输入格式）
     
     参数：
-    - timestamp: 时间戳（秒），如果为 None 使用当前时间
+    - time_input: 时间输入，支持：
+      * None：使用当前时间
+      * float/int：时间戳（秒）
+      * str：Twitter 格式时间字符串，如 "Fri Nov 14 07:01:08 +0000 2025"
     
     返回：
     - UTC+8 格式的字符串（注意：这只是格式化，没有实际时区转换）
     """
-    if timestamp is None:
-        timestamp = datetime.now().timestamp()
+    dt = None
     
-    dt = datetime.fromtimestamp(timestamp)
+    if time_input is None:
+        # 使用当前时间
+        dt = datetime.now()
+    elif isinstance(time_input, (float, int)):
+        # 时间戳
+        dt = datetime.fromtimestamp(time_input)
+    elif isinstance(time_input, str):
+        # Twitter 格式时间字符串："Fri Nov 14 07:01:08 +0000 2025"
+        try:
+            dt = datetime.strptime(time_input, "%a %b %d %H:%M:%S %z %Y")
+        except ValueError:
+            # 解析失败，使用当前时间
+            dt = datetime.now()
+    else:
+        # 未知类型，使用当前时间
+        dt = datetime.now()
+    
     return dt.strftime("%Y-%m-%d %H:%M:%S")

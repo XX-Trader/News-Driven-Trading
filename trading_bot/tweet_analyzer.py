@@ -56,7 +56,7 @@ def ai_analyze_text(text: str, author: str, introduction: str) -> str:
     prompt = prompt.replace('{text1}', text)
     prompt = prompt.replace('{text2}', author)
     prompt = prompt.replace('{text3}', introduction)
-    print('prompt', prompt)
+    # print('prompt', prompt)
     
     try:
         import openai

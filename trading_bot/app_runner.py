@@ -72,7 +72,7 @@ class TweetSignalSourceConfig:
     - max_tweets_per_loop: 每次循环最多处理的推文数（用于调试），-1 表示不限制
     """
 
-    poll_interval_sec: int = 10  # 修复：与文档描述一致，默认10秒
+    poll_interval_sec: int = 100  # 修复：与文档描述一致，默认10秒
     max_tweets_per_loop: int = 1  # -1 表示不限制，调试时可设为 3-5
     max_tweets_analyse: int = 1  # 同时运行的 ai处理的推文条数
 
@@ -131,7 +131,7 @@ class TwitterCrawlerSignalSource(SignalSource):
             try:
                 # 从队列取推文数据
                 queue_item = await self.ai_queue.get()
-                
+                print('queue_item', queue_item)
                 # 健壮地提取数据
                 tweet = queue_item.get("tweet", {})
                 tweet_id = queue_item.get("tweet_id")
@@ -167,6 +167,7 @@ class TwitterCrawlerSignalSource(SignalSource):
                 user_intro_mapping = getattr(
                     self.ai_router.config, "user_intro_mapping", {}
                 ) if hasattr(self.ai_router, "config") else {}
+                print(f"[AI_WORKER] user_intro_mapping: {user_intro_mapping}")
                 introduction = user_intro_mapping.get(user_name, "unknown author")
                 
                 print(f"[AI_WORKER] processing tweet {tweet_id}")
@@ -199,8 +200,8 @@ class TwitterCrawlerSignalSource(SignalSource):
                         success=True,
                         parsed_result=ai_result
                     )
-                    # 实时持久化
-                    self.record_manager.save_to_file()
+                    # 实时持久化(已经在update_ai_result实现了)
+                    # self.record_manager.save_to_file()
                     
                 except asyncio.TimeoutError:
                     retry_count = self.tweet_status[tweet_id].get("retry_count", 0) + 1
@@ -218,9 +219,9 @@ class TwitterCrawlerSignalSource(SignalSource):
                     self.record_manager.update_retry_count(tweet_id, retry_count)
                     
                     # 如果重试3次，标记为已处理并持久化
-                    if retry_count >= 3:
-                        print(f"[AI_WORKER] max retries reached for tweet {tweet_id}, marking as processed")
-                        self.record_manager.save_to_file()
+                    # if retry_count >= 3:
+                    #     print(f"[AI_WORKER] max retries reached for tweet {tweet_id}, marking as processed")
+                    #     self.record_manager.save_to_file()
                     
                 except Exception as e:
                     retry_count = self.tweet_status[tweet_id].get("retry_count", 0) + 1
@@ -237,10 +238,10 @@ class TwitterCrawlerSignalSource(SignalSource):
                     )
                     self.record_manager.update_retry_count(tweet_id, retry_count)
                     
-                    # 如果重试3次，标记为已处理并持久化
-                    if retry_count >= 3:
-                        print(f"[AI_WORKER] max retries reached for tweet {tweet_id}, marking as processed")
-                        self.record_manager.save_to_file()
+                    # 如果重试3次，标记为已处理并持久化（已经在 update_retry_count 实现了)）
+                    # if retry_count >= 3:
+                    #     print(f"[AI_WORKER] max retries reached for tweet {tweet_id}, marking as processed")
+                    #     self.record_manager.save_to_file()
                     
             except Exception as e:
                 print(f"[AI_WORKER] unexpected error: {e}")
@@ -326,7 +327,7 @@ class TwitterCrawlerSignalSource(SignalSource):
                     if raw_tweets:
                         # 仅打印 ID 和部分文本，避免刷屏
                         first = raw_tweets[0]
-                        print(f"[DEBUG] First tweet: id={first.get('id')}, text_len={len(str(first.get('text', '')))}")
+                        # print(f"[DEBUG] First tweet: id={first.get('id')}, text_len={len(str(first.get('text', '')))}")
                 except Exception as e:
                     print(f"[TwitterCrawlerSignalSource] fetch_latest_tweets error: {e}")
                     import traceback
@@ -396,7 +397,7 @@ class TwitterCrawlerSignalSource(SignalSource):
                         author_obj = tweet.get("author")
                         username = "unknown"
                         if isinstance(author_obj, dict):
-                            username = str(author_obj.get("userName") or author_obj.get("name") or "unknown")
+                            username = str(author_obj.get("userName")).strip()
                         elif author_obj:
                             username = str(author_obj)
                         
@@ -404,7 +405,7 @@ class TwitterCrawlerSignalSource(SignalSource):
                         record = TweetProcessingRecord(
                             tweet_id=tweet_id,
                             username=username,
-                            tweet_time=format_time_simple(),
+                            tweet_time=format_time_simple(tweet.get('createdAt', None)),
                             tweet_preview=get_tweet_preview(text),
                             ai_success=False,  # 初始为 False，AI处理后再更新
                         )
@@ -461,8 +462,8 @@ class TwitterCrawlerSignalSource(SignalSource):
 
         AI 结果格式：
         {
-            "交易币种": "BTC" 或 ["BTC", "ETH"],
-            "交易方向": "做多" | "做空",
+            "交易币种": ["BTC/USDT"] 或 ["BTC/USDT", "ETH/USDT"],
+            "交易方向": "long" | "short" | "观望",
             "消息置信度": 0-100,
             ...
         }
@@ -482,11 +483,11 @@ class TwitterCrawlerSignalSource(SignalSource):
             return None
 
         # 提取交易方向（AI 返回中文）
-        direction = ai_result.get("交易方向") or ai_result.get("direction") or "做多"
+        direction = ai_result.get("交易方向") or ai_result.get("direction")
         side: str = "BUY" if ("做多" in str(direction)) else "SELL"
 
-        # 提取置信度
-        confidence = ai_result.get("消息置信度") or ai_result.get("confidence") or 50
+        # 提取置信度（默认值10）
+        confidence = ai_result.get("消息置信度") or ai_result.get("confidence") or 10
 
         return TradeSignal(
             symbol=symbol,
@@ -714,7 +715,7 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
                         "price": price,
                     }
                 )
-                signal_source.record_manager.save_to_file()
+                # signal_source.record_manager.save_to_file()
             print(f"[TWITTER_API] updated trade info for tweet {tweet_id}")
 
             # 创建 Position 对象并注册风控监控
