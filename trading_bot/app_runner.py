@@ -97,10 +97,12 @@ class TwitterCrawlerSignalSource(SignalSource):
         fetch_func: FetchLatestTweetsFunc,
         tweet_conf: TweetSignalSourceConfig,
         ai_router: AIModelRouter,
+        app_config: AppConfig,  # 新增参数
     ) -> None:
         self.fetch_func = fetch_func
         self.tweet_conf = tweet_conf
         self.ai_router = ai_router
+        self.app_config = app_config  # 存储完整配置
         
         # 推文记录管理器（v2.0.0 新增）
         self.record_manager = TweetRecordManager()
@@ -113,6 +115,30 @@ class TwitterCrawlerSignalSource(SignalSource):
         # 后台 worker 任务
         self.worker_tasks: List[asyncio.Task] = []
         self.cleanup_task: Optional[asyncio.Task] = None
+
+    def _init_tweet_status(self, tweet_id: str) -> None:
+        """初始化推文状态，仅在使用前调用"""
+        if tweet_id not in self.tweet_status:
+            self.tweet_status[tweet_id] = {
+                "retry_count": 0,
+                "created_at": time.time()
+            }
+
+    def _update_tweet_status(self, tweet_id: str, status: str, retry_count: Optional[int] = None) -> None:
+        """更新推文状态，自动处理时间戳"""
+        self.tweet_status[tweet_id]["status"] = status
+        self.tweet_status[tweet_id]["last_update"] = time.time()
+        if retry_count is not None:
+            self.tweet_status[tweet_id]["retry_count"] = retry_count
+
+    def _get_tweet_status(self, tweet_id: str) -> Optional[Dict[str, Any]]:
+        """获取推文状态，如果不存在返回 None"""
+        return self.tweet_status.get(tweet_id)
+
+    def _delete_tweet_status(self, tweet_id: str) -> None:
+        """删除推文状态"""
+        if tweet_id in self.tweet_status:
+            del self.tweet_status[tweet_id]
 
     async def _ai_worker(self) -> None:
         """
@@ -131,7 +157,7 @@ class TwitterCrawlerSignalSource(SignalSource):
             try:
                 # 从队列取推文数据
                 queue_item = await self.ai_queue.get()
-                print('queue_item', queue_item)
+                # print('queue_item', queue_item)
                 # 健壮地提取数据
                 tweet = queue_item.get("tweet", {})
                 tweet_id = queue_item.get("tweet_id")
@@ -141,13 +167,8 @@ class TwitterCrawlerSignalSource(SignalSource):
                     continue
                 
                 # 更新状态为处理中
-                if tweet_id not in self.tweet_status:
-                    self.tweet_status[tweet_id] = {
-                        "retry_count": 0,
-                        "created_at": time.time()
-                    }
-                self.tweet_status[tweet_id]["status"] = "processing"
-                self.tweet_status[tweet_id]["last_update"] = time.time()
+                self._init_tweet_status(tweet_id)
+                self._update_tweet_status(tweet_id, "processing")
                 
                 # 1. 提取文本
                 text = str(tweet.get("text", "")).strip()
@@ -164,34 +185,31 @@ class TwitterCrawlerSignalSource(SignalSource):
                     user_name = str(author_obj)
                 
                 # 3. 获取简介
-                user_intro_mapping = getattr(
-                    self.ai_router.config, "user_intro_mapping", {}
-                ) if hasattr(self.ai_router, "config") else {}
-                print(f"[AI_WORKER] user_intro_mapping: {user_intro_mapping}")
+                user_intro_mapping = self.app_config.twitter_api.user_intro_mapping
+                # print(f"[AI_WORKER] user_intro_mapping: {user_intro_mapping}")
                 introduction = user_intro_mapping.get(user_name, "unknown author")
                 
                 print(f"[AI_WORKER] processing tweet {tweet_id}")
                 print(f"[AI_WORKER] user: {user_name}")
                 print(f"[AI_WORKER] user_intro: {introduction}")
-                print(f"[AI_WORKER] tweet text length: {len(text)}")
+                print(f"[AI_WORKER] tweet text length: {text}")
                 
                 if not text:
                     print(f"[AI_WORKER] warning: empty text for tweet {tweet_id}")
                 
                 try:
                     # 异步调用 AI，30 秒超时
-                    print(f"[AI_WORKER] calling AI for tweet {tweet_id}")
+                    # print(f"[AI_WORKER] calling AI for tweet {text}")
                     ai_result = await call_ai_for_tweet_async(
                         text=text,
                         author=user_name,
                         introduction=introduction,
                         timeout=30
                     )
+                    print(f"[AI_WORKER] AI result for tweet {tweet_id}: {ai_result}")
                     self.ai_results_cache[tweet_id] = ai_result
-                    self.tweet_status[tweet_id]["status"] = "done"
-                    self.tweet_status[tweet_id]["last_update"] = time.time()
                     # 成功时重置重试计数
-                    self.tweet_status[tweet_id]["retry_count"] = 0
+                    self._update_tweet_status(tweet_id, "done", 0)
                     print(f"[AI_WORKER] completed for tweet {tweet_id}, result: {ai_result}")
                     
                     # 更新推文记录（AI成功）
@@ -200,14 +218,17 @@ class TwitterCrawlerSignalSource(SignalSource):
                         success=True,
                         parsed_result=ai_result
                     )
+                    # 测试时候添加延时
+                    await asyncio.sleep(20)
+
                     # 实时持久化(已经在update_ai_result实现了)
                     # self.record_manager.save_to_file()
                     
                 except asyncio.TimeoutError:
-                    retry_count = self.tweet_status[tweet_id].get("retry_count", 0) + 1
-                    self.tweet_status[tweet_id]["status"] = "timeout"
-                    self.tweet_status[tweet_id]["last_update"] = time.time()
-                    self.tweet_status[tweet_id]["retry_count"] = retry_count
+                    status_info = self._get_tweet_status(tweet_id)
+                    if status_info:
+                        retry_count = status_info.get("retry_count", 0) + 1
+                        self._update_tweet_status(tweet_id, "timeout", retry_count)
                     print(f"[AI_WORKER] timeout after 30s for tweet {tweet_id} (retry {retry_count}/3)")
                     
                     # 更新推文记录（AI超时）
@@ -224,10 +245,10 @@ class TwitterCrawlerSignalSource(SignalSource):
                     #     self.record_manager.save_to_file()
                     
                 except Exception as e:
-                    retry_count = self.tweet_status[tweet_id].get("retry_count", 0) + 1
-                    self.tweet_status[tweet_id]["status"] = "error"
-                    self.tweet_status[tweet_id]["last_update"] = time.time()
-                    self.tweet_status[tweet_id]["retry_count"] = retry_count
+                    status_info = self._get_tweet_status(tweet_id)
+                    if status_info:
+                        retry_count = status_info.get("retry_count", 0) + 1
+                        self._update_tweet_status(tweet_id, "error", retry_count)
                     print(f"[AI_WORKER] error for tweet {tweet_id}: {e} (retry {retry_count}/3)")
                     
                     # 更新推文记录（AI异常）
@@ -265,7 +286,10 @@ class TwitterCrawlerSignalSource(SignalSource):
                 
                 ids_to_remove = []
                 
-                for tweet_id, status_info in self.tweet_status.items():
+                for tweet_id in list(self.tweet_status.keys()):
+                    status_info = self._get_tweet_status(tweet_id)
+                    if not status_info:
+                        continue
                     created_at = status_info.get("created_at", now)
                     last_update = status_info.get("last_update", created_at)
                     status = status_info.get("status")
@@ -273,16 +297,17 @@ class TwitterCrawlerSignalSource(SignalSource):
                     # 1. 僵尸任务检测 (Processing > 5 mins)
                     if status == "processing" and (now - last_update > 300):
                         print(f"[CLEANUP] detected zombie task {tweet_id} (processing > 300s), forcing timeout")
-                        self.tweet_status[tweet_id]["status"] = "timeout"
-                        self.tweet_status[tweet_id]["retry_count"] = self.tweet_status[tweet_id].get("retry_count", 0) + 1
-                        self.tweet_status[tweet_id]["last_update"] = now
+                        status_info = self._get_tweet_status(tweet_id)
+                        if status_info:
+                            new_retry_count = status_info.get("retry_count", 0) + 1
+                            self._update_tweet_status(tweet_id, "timeout", new_retry_count)
                     
                     # 2. 过期清理 (Created > 30 mins)
                     if now - created_at > 1800:
                         ids_to_remove.append(tweet_id)
                 
                 for tweet_id in ids_to_remove:
-                    del self.tweet_status[tweet_id]
+                    self._delete_tweet_status(tweet_id)
                     self.ai_results_cache.pop(tweet_id, None)
                     # print(f"[CLEANUP] expired tweet {tweet_id} removed after 30m")
                     
@@ -300,17 +325,13 @@ class TwitterCrawlerSignalSource(SignalSource):
 
         注意：使用 async for 直接迭代，不要对生成器使用 await
         """
-        print("[DEBUG] stream() starting...")
-        
         # 启动 3 个后台 worker 任务
         for i in range(self.tweet_conf.max_tweets_analyse):
             worker_task = asyncio.create_task(self._ai_worker())
             self.worker_tasks.append(worker_task)
-            print(f"[AI_QUEUE] worker {i+1} started")
         
         # 启动过期推文清理任务
         self.cleanup_task = asyncio.create_task(self._cleanup_expired_tweets())
-        print("[AI_QUEUE] cleanup task started")
         
         loop_count = 0
         
@@ -354,21 +375,18 @@ class TwitterCrawlerSignalSource(SignalSource):
                     # 2. 内存状态检查与重试逻辑
                     should_enqueue = False
                     
-                    if tweet_id not in self.tweet_status:
+                    if self._get_tweet_status(tweet_id) is None:
                         # Case A: 全新推文 -> 入队
                         should_enqueue = True
-                        self.tweet_status[tweet_id] = {
-                            "retry_count": 0,
-                            "status": "pending",
-                            "created_at": time.time(),
-                            "last_update": time.time()
-                        }
-                        print(f"[AI_QUEUE] new tweet {tweet_id} enqueued (retry 0/3)")
+                        self._init_tweet_status(tweet_id)
+                        self._update_tweet_status(tweet_id, "pending")
+                        # print(f"[AI_QUEUE] new tweet {tweet_id} enqueued (retry 0/3)")
                     else:
                         # Case B: 已在内存中，检查状态
-                        status_info = self.tweet_status[tweet_id]
-                        current_status = status_info.get("status")
-                        retry_count = status_info.get("retry_count", 0)
+                        status_info = self._get_tweet_status(tweet_id)
+                        if status_info:
+                            current_status = status_info.get("status")
+                            retry_count = status_info.get("retry_count", 0)
                         
                         if current_status in ("processing", "pending"):
                             # 正在处理或待处理 -> 跳过
@@ -384,8 +402,7 @@ class TwitterCrawlerSignalSource(SignalSource):
                             else:
                                 # 可重试 -> 重新入队
                                 should_enqueue = True
-                                self.tweet_status[tweet_id]["status"] = "pending"
-                                self.tweet_status[tweet_id]["last_update"] = time.time()
+                                self._update_tweet_status(tweet_id, "pending")
                                 print(f"[AI_QUEUE] tweet {tweet_id} re-enqueued (retry {retry_count}/3)")
                     
                     if should_enqueue:
@@ -431,7 +448,7 @@ class TwitterCrawlerSignalSource(SignalSource):
                             yield signal
 
                 print(f"[DEBUG] Loop #{loop_count} finished: processed {processed_count} new tweets, skipped {skipped_count} already processed")
-                print(f"[DEBUG] Sleeping for {self.tweet_conf.poll_interval_sec} seconds...")
+                # print(f"[DEBUG] Sleeping for {self.tweet_conf.poll_interval_sec} seconds...")
                 await asyncio.sleep(self.tweet_conf.poll_interval_sec)
         
         except asyncio.CancelledError:
@@ -527,7 +544,7 @@ async def build_trading_app_context() -> TradingAppContext:
     - 创建 TwitterCrawlerSignalSource（数据来自 trading_bot/twitter_source.py）
     """
     config = load_config()
-    ai_router = AIModelRouter(config.ai)
+    ai_router = AIModelRouter(config)
     exchange_client = BinanceAsyncClient(config=config)
 
     # 创建推特信号源配置（仅轮询间隔）
@@ -543,6 +560,7 @@ async def build_trading_app_context() -> TradingAppContext:
             fetch_func=fetch_latest_tweets,
             tweet_conf=tweet_conf,
             ai_router=ai_router,
+            app_config=config,  # 新增参数
         )
     except Exception as e:
         print(f"[build_trading_app_context] fallback to InMemorySignalSource because: {e}")
@@ -597,18 +615,17 @@ async def _consume_signals_and_trade(app: TradingAppContext) -> None:
         except Exception as e:
             print(f"[EXIT] error closing position: {e}")
             return None
-    print("[main] starting risk manager")
+
     risk_manager = RiskManager(
         risk_conf=app.config.risk,
         price_fetcher=price_fetcher,
         close_executor=close_executor,
         poll_interval_sec=1.0,
     )
-    print("[main] starting risk manager...")
     
     # 创建信号过滤器（新增）
     signal_filter = SignalFilter(risk_config=app.config.risk)
-    print("[main] signal filter initialized")
+
     
     # 追踪所有活跃的风控监控任务（修复：内存泄漏 - 持仓完成后未清理任务）
     monitor_tasks: Dict[str, asyncio.Task] = {}
@@ -765,9 +782,6 @@ async def start_trading_app() -> None:
     app = await build_trading_app_context()
     main_task = asyncio.create_task(_consume_signals_and_trade(app))
     app.tasks.append(main_task)
-
-    print("[trading_app] started. Press Ctrl+C to stop.")
-
     try:
         await asyncio.gather(*app.tasks, return_exceptions=True)
     except asyncio.CancelledError:

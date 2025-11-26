@@ -23,9 +23,9 @@ import asyncio
 
 
 try:
-    from config import AIConfig 
+    from config import AIConfig, AppConfig
 except ImportError:
-    from .config import AIConfig
+    from .config import AIConfig, AppConfig
 
 @dataclass
 class AIInput:
@@ -103,8 +103,9 @@ class AIModelRouter:
     - 若所有模型失败或超时，则抛出 RuntimeError。
     """
 
-    def __init__(self, config: AIConfig) -> None:
-        self.config = config
+    def __init__(self, config: AppConfig) -> None:
+        self.app_config = config           # 完整配置
+        self.config = config.ai            # 向后兼容
         self.models: List[BaseAIModel] = []
 
         if self.config.enabled:

@@ -49,8 +49,6 @@ def main() -> None:
     - 注册 Ctrl+C 信号处理；
     - 启动异步交易应用；
     """
-    print("[main] starting trading bot...")
-
     # 在 Windows 上 signal.SIGINT 处理并不总是必要，这里仅做兼容占位
     def handle_sigint(signum, frame):
         print("[main] received SIGINT, stopping soon...")
