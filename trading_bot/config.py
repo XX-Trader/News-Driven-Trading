@@ -82,22 +82,22 @@ class AIConfig:
     # AI 路由超时时间（秒）
     router_timeout_sec: float = 60.0
 
-    # ===== Poe(OpenAI 兼容)配置（当前直接硬编码，方便你本地快速联调。
+    # 默认AI提供者（"poe" 或 "openrouter"）
+    default_provider: str = "poe"
+
+    # ===== Poe API 配置（当前直接硬编码，方便你本地快速联调。
     # 实盘前强烈建议改为从环境变量或独立配置文件加载）=====
     poe_api_key: str = (
         "OboBsTgiTVCQs15npJuWcIUVIoOW7Spz1XzyHOcc8Zk"  # 示例 Key
     )
-    poe_base_url: str = "https://api.poe.com/v1"
-    # poe_model: str = "gpt-5.1"
-    # poe_model: str = "Kimi-K2-Thinking"
-    poe_model: str = "gemini-3-pro"
+    poe_base_url: str = "https://api.poe.com/v1/chat/completions"
+    poe_model: str = "kimi-k2-thinking"  # 模型名称（小写）
+    # poe_model: str = "gemini-3-pro"  # 模型名称（小写）
 
-    # AI代理配置（MVP新增）
-    use_proxy: bool = False  # 是否启用代理（默认真盘直连，调试可改为True）
-    proxy_config: Dict[str, str] = field(default_factory=lambda: {
-        "http": "http://localhost:1080",
-        "https": "http://localhost:1080"
-    })  # 代理URL配置（仅当use_proxy=True时生效）
+    # ===== OpenRouter API 配置 =====
+    openrouter_api_key: str = "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"  # 示例 Key
+    openrouter_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
+    openrouter_model: str = "x-ai/grok-4.1-fast:free"  # 模型名称
 
     # 预留多模型路由的配置（当前不使用）
     models: List[Dict[str, Any]] = field(default_factory=list)
